@@ -1,6 +1,6 @@
 # LegadoHub
 
-自托管小说聚合订阅服务，为 Reading / Legado 提供稳定的后端书源。
+自托管小说聚合订阅服务，为 Reading / Legado 提供稳定的后端书源。配套阅读客户端：[legado-X](https://github.com/XziXmn/legado-X)。
 
 ---
 
@@ -127,7 +127,9 @@ docker compose exec -T legadohub \
 
 ### 6. 接入 Reading / Legado
 
-读者导入管理员发放的**专属书源链接**即可（必须带 `code`），例如：
+读者导入管理员发放的**专属书源链接**即可（必须带 `code`）。推荐使用配套客户端 [legado-X](https://github.com/XziXmn/legado-X)（支持章节评论）；官方 Reading / Legado 及常见衍生版也可导入同一条书源，评论入口会自动降级。
+
+例如：
 
 ```
 http://服务器IP:8765/api/subscribe/legado/source?code=...
@@ -353,6 +355,12 @@ Set-Location ../backend
 
 ---
 
+## 相关项目
+
+- [legado-X](https://github.com/XziXmn/legado-X) — 基于 [Legado-E](https://github.com/Luoyacheng/legado-E) / [Legado](https://github.com/gedoor/legado) 的定制阅读客户端。导入本服务发放的专属书源即可搜索、订阅、阅读；支持段评、页热评与章末评论。普通 Reading / Legado 也可使用本服务，评论入口会自动降级。
+
+---
+
 ## 友情链接
 
 - [LINUX DO](https://linux.do/)
@@ -368,3 +376,4 @@ Set-Location ../backend
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker Image](https://img.shields.io/badge/Docker-xzixmn%2Flegado--hub-2496ED?logo=docker)](https://hub.docker.com/r/xzixmn/legado-hub)
 [![GitHub](https://img.shields.io/badge/GitHub-XziXmn-181717?logo=github)](https://github.com/XziXmn/legado-hub)
+[![legado-X](https://img.shields.io/badge/Client-legado--X-181717?logo=github)](https://github.com/XziXmn/legado-X)
