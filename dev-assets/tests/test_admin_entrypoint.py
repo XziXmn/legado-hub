@@ -314,3 +314,89 @@ async def test_dispatch_lifespan_is_owned_only_by_public_app() -> None:
         lambda _message: None,
     )
     assert calls == ["public:lifespan"]
+
+
+# ---- Admin surface origin/proxy ergonomics and reader-target redirects ----
+
+
+def _dynamic_admin_app(monkeypatch) -> "TestClient":
+    monkeypatch.delenv("LEGADOHUB_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("LEGADOHUB_ADMIN_BASE_URL", raising=False)
+    monkeypatch.delenv("LEGADOHUB_ADMIN_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("LEGADOHUB_ADMIN_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.delenv("LEGADOHUB_ADMIN_TRUSTED_PROXIES", raising=False)
+    monkeypatch.delenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", raising=False)
+    admin_app = create_app(
+        load_admin_security_config(),
+        entrypoint=EntryPoint.ADMIN,
+        manage_runtime=False,
+    )
+    return TestClient(admin_app, base_url="http://nas.lan:8766")
+
+
+def test_admin_login_tolerates_proxied_same_host_origin(monkeypatch) -> None:
+    client = _dynamic_admin_app(monkeypatch)
+    # TLS-terminating proxy without forwarded proto: Origin scheme differs from
+    # the backend view, but the host matches — this is one deployment, not CSRF.
+    tolerated = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "definitely-wrong"},
+        headers={"Origin": "https://nas.lan"},
+    )
+    assert tolerated.status_code == 401
+    assert tolerated.json()["detail"] == "用户名或密码错误"
+
+    rejected = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "definitely-wrong"},
+        headers={"Origin": "https://other.lan"},
+    )
+    assert rejected.status_code == 403
+    detail = rejected.json()["detail"]
+    assert detail["code"] == "admin_origin_rejected"
+    assert "来源校验未通过" in detail["message"]
+    assert "https://other.lan" in detail["observedOrigin"]
+    assert "http://nas.lan:8766" in detail["expectedOrigin"]
+
+
+def test_admin_explicit_origins_keep_strict_scheme_check(monkeypatch) -> None:
+    _dynamic_admin_app(monkeypatch)
+    monkeypatch.setenv("LEGADOHUB_ADMIN_ALLOWED_ORIGINS", "http://nas.lan:8766")
+    admin_app = create_app(
+        load_admin_security_config(),
+        entrypoint=EntryPoint.ADMIN,
+        manage_runtime=False,
+    )
+    client = TestClient(admin_app, base_url="http://nas.lan:8766")
+    rejected = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "definitely-wrong"},
+        headers={"Origin": "https://nas.lan"},
+    )
+    assert rejected.status_code == 403
+
+
+def test_admin_enter_redirect_targets_external_reader_origin(monkeypatch) -> None:
+    client = _dynamic_admin_app(monkeypatch)
+    monkeypatch.setenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "http://192.168.31.5:4390")
+    response = client.get(
+        "/api/auth/access/enter",
+        params={"code": "LH1.code", "next": "/console/subscription"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert response.headers["location"] == (
+        "http://192.168.31.5:4390/api/auth/access/enter"
+        "?code=LH1.code&next=%2Fconsole%2Fsubscription"
+    )
+
+
+def test_admin_enter_redirect_without_mapping_keeps_legacy_reader_port(monkeypatch) -> None:
+    client = _dynamic_admin_app(monkeypatch)
+    response = client.get(
+        "/api/auth/access/enter",
+        params={"code": "LH1.code", "next": "/console/subscription"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("http://nas.lan:8765/api/auth/access/enter")

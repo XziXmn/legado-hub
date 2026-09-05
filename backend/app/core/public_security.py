@@ -116,6 +116,10 @@ class PublicSecurityConfig:
     enforce_origin: bool = False
     # Reader entry only: public Host must match settings allowlist.
     enforce_reading_public_allowlist: bool = False
+    # Admin listener: dynamic mode tolerates same-host origins that differ in
+    # scheme/port (TLS-terminating reverse proxies without forwarded headers).
+    admin_surface: bool = False
+    origin_allow_same_host: bool = False
 
     def is_trusted_proxy(self, host: str) -> bool:
         try:
@@ -250,7 +254,19 @@ def load_admin_security_config() -> PublicSecurityConfig:
             "LEGADOHUB_ADMIN_ALLOWED_ORIGINS must include LEGADOHUB_ADMIN_BASE_URL."
         )
 
-    proxy_values = _csv("LEGADOHUB_ADMIN_TRUSTED_PROXIES") or ["127.0.0.1/32", "::1/128"]
+    # The admin listener is a LAN/trusted-operator surface. Home-lab reverse
+    # proxies (Synology/NPM/1Panel…) terminate TLS from a Docker bridge or LAN
+    # address, so private networks are trusted for forwarded headers by default;
+    # an explicit LEGADOHUB_ADMIN_TRUSTED_PROXIES still wins.
+    proxy_values = _csv("LEGADOHUB_ADMIN_TRUSTED_PROXIES") or [
+        "127.0.0.1/32",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "fc00::/7",
+        "fe80::/10",
+    ]
     return PublicSecurityConfig(
         public_base_url=base_url,
         allowed_hosts=tuple(dict.fromkeys(normalized_hosts)),
@@ -260,6 +276,12 @@ def load_admin_security_config() -> PublicSecurityConfig:
         require_https=require_https,
         enforce_origin=True,
         enforce_reading_public_allowlist=False,
+        admin_surface=True,
+        # Dynamic mode without an explicit origin allowlist: browsers behind a
+        # TLS-terminating proxy send an Origin whose host matches the Host but
+        # whose scheme/port differ (https://nas vs http://nas:8766). Host, not
+        # scheme, is what same-site enforcement hinges on here.
+        origin_allow_same_host=dynamic_base_url and not origins,
     )
 
 
@@ -508,16 +530,75 @@ def get_public_base_url(request: Request | None = None) -> str:
 def reading_base_url(request: Request | None = None) -> str:
     """Base URL for Reading book-source JSON and access/enter links.
 
-    Always targets the **reader** entrypoint port. Admin console is often on
+    Always targets the **reader** entrypoint. Admin console is often on
     ``ADMIN_PORT`` (8766); baking that into LEGADOHUB_BASE makes
     ``/api/auth/access/enter`` 404 because access routes only register on the
     public listener.
     """
-    return ensure_reader_entrypoint_origin(get_public_base_url(request))
+    return ensure_reader_entrypoint_origin(get_public_base_url(request), request=request)
 
 
-def ensure_reader_entrypoint_origin(base: str) -> str:
-    """Rewrite admin-port origins to the reader port; leave other origins as-is."""
+def reader_external_origin_env() -> str:
+    """``LEGADOHUB_READER_EXTERNAL_ORIGIN`` — the reader entrypoint as clients see it.
+
+    Docker port mappings (``4390:8765``) make the external reader port differ
+    from ``config.PORT``; the backend cannot discover it, so operators declare
+    it. Accepts a full origin (``http://192.168.31.5:4390``) or a bare external
+    port (``4390``, applied to the base's host).
+    """
+    return os.getenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "").strip().rstrip("/")
+
+
+def _reader_external_target(base_host: str) -> str:
+    """Configured externally reachable reader origin for ``base_host``, or ""."""
+    raw = reader_external_origin_env()
+    if raw:
+        if raw.isdigit() and len(raw) <= 5:
+            port = int(raw)
+            if 1 <= port <= 65535:
+                return f"http://{base_host}:{port}"
+        else:
+            try:
+                return normalize_public_base_url(raw)
+            except RuntimeError:
+                pass
+    # Settings/env 公网书源地址 entries only apply to their own host so a
+    # public domain never leaks into a LAN origin's rewrite.
+    for candidate in effective_public_base_urls():
+        if _origin_host(candidate) == base_host:
+            return candidate
+    return ""
+
+
+def _origin_host(value: str) -> str:
+    try:
+        return _normalize_host(urlsplit(value).hostname or "")
+    except Exception:
+        return ""
+
+
+def _request_is_admin_surface(request: Request | None) -> bool:
+    return bool(request is not None and getattr(request.app.state, "entrypoint", "") == "admin")
+
+
+def ensure_reader_entrypoint_origin(base: str, *, request: Request | None = None) -> str:
+    """Rewrite admin-entrypoint origins to the externally reachable reader origin.
+
+    An origin on the admin surface — internal ``ADMIN_PORT``, or the origin of
+    a request served by the admin listener — must not be baked into generated
+    links: ``/api/auth/access/enter`` and the Reading APIs only register on the
+    reader listener. Under Docker port mappings the external reader port is
+    neither derivable from ``config.PORT`` nor equal to the admin port, so the
+    reader target resolves as:
+
+    1. ``LEGADOHUB_READER_EXTERNAL_ORIGIN`` (full origin or bare external port).
+    2. A configured 公网书源地址 entry whose host matches the base host.
+    3. The current request's own origin when it is served by the reader
+       listener and shares the base host.
+    4. Legacy fallback: same host + ``config.PORT`` (host port == container port).
+
+    Origins that are not on the admin surface pass through unchanged.
+    """
     from urllib.parse import urlsplit, urlunsplit
 
     from app.config import ADMIN_PORT, PORT as PUBLIC_PORT
@@ -535,9 +616,28 @@ def ensure_reader_entrypoint_origin(base: str) -> str:
         return normalized
     port = parts.port
     scheme = (parts.scheme or "http").lower()
-    if port != ADMIN_PORT:
+    on_admin_surface = port == ADMIN_PORT
+    if not on_admin_surface and _request_is_admin_surface(request):
+        try:
+            request_origin = get_public_base_url(request) if request is not None else ""
+        except Exception:
+            request_origin = ""
+        on_admin_surface = _origin_host(request_origin) == _normalize_host(host)
+    if not on_admin_surface:
         return normalized.rstrip("/")
-    # Admin port → reader port (preserve host + scheme).
+
+    # Admin surface → externally reachable reader origin.
+    configured = _reader_external_target(_normalize_host(host))
+    if configured:
+        return configured.rstrip("/")
+    if request is not None and not _request_is_admin_surface(request):
+        try:
+            request_origin = get_public_base_url(request)
+        except Exception:
+            request_origin = ""
+        if request_origin and _origin_host(request_origin) == _normalize_host(host):
+            return request_origin.rstrip("/")
+    # Legacy fallback: same host on the internal reader port.
     if (scheme == "http" and PUBLIC_PORT == 80) or (scheme == "https" and PUBLIC_PORT == 443):
         netloc = host
     else:
@@ -586,6 +686,8 @@ def _security_rejection(
     status_code: int,
     detail: str,
     api_response: bool,
+    content: dict | None = None,
+    log_context: str = "",
 ) -> JSONResponse:
     now = time.monotonic()
     should_log = False
@@ -595,11 +697,47 @@ def _security_rejection(
             _security_last_log[event] = now
             should_log = True
     if should_log:
-        logger.warning("Security request rejected: event=%s request_id=%s", event, request_id)
-    response = JSONResponse(status_code=status_code, content={"detail": detail})
+        logger.warning(
+            "Security request rejected: event=%s request_id=%s%s",
+            event,
+            request_id,
+            f" {log_context}" if log_context else "",
+        )
+    response = JSONResponse(
+        status_code=status_code,
+        content=content if content is not None else {"detail": detail},
+    )
     response.headers["X-Request-ID"] = request_id
     _apply_response_headers(response, security, api_response=api_response)
     return response
+
+
+def _admin_origin_hint(origin: str, request_origin: str) -> dict:
+    """Structured, actionable detail for admin-surface origin rejections.
+
+    The admin login previously failed with a bare English "Origin is not
+    allowed", which users read as a wrong password. Name the mismatch and the
+    exact fixes so operators can self-serve.
+    """
+    observed = origin or "(missing)"
+    return {
+        "code": "admin_origin_rejected",
+        "observedOrigin": observed,
+        "expectedOrigin": request_origin,
+        "message": (
+            f"来源校验未通过：浏览器提交的 Origin「{observed}」与后端识别的访问地址"
+            f"「{request_origin}」不一致。若经反向代理访问，请透传 Host 与协议："
+            "proxy_set_header Host $http_host; proxy_set_header X-Forwarded-Proto $scheme;"
+            "（信任的代理网段默认含内网地址段），或在环境变量 "
+            "LEGADOHUB_ADMIN_ALLOWED_ORIGINS 中加入浏览器地址栏的完整访问地址后重启。"
+        ),
+    }
+
+
+def _origin_same_host(origin: str, request_origin: str) -> bool:
+    if not origin or not request_origin:
+        return False
+    return bool(_origin_host(origin)) and _origin_host(origin) == _origin_host(request_origin)
 
 
 def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> None:
@@ -617,6 +755,20 @@ def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> Non
             try:
                 request_origin = _request_origin(request, security)
             except RuntimeError:
+                host_hint = (
+                    {
+                        "code": "admin_host_rejected",
+                        "message": (
+                            "Host 校验未通过：请求的 Host 与客户端地址不匹配"
+                            "（内网 Host 仅接受来自本地/内网的客户端）。"
+                            "若经反向代理访问，请透传 Host（proxy_set_header Host $http_host）"
+                            "并把代理网段加入 LEGADOHUB_ADMIN_TRUSTED_PROXIES；"
+                            "固定域名访问请设置 LEGADOHUB_ADMIN_BASE_URL。"
+                        ),
+                    }
+                    if security.admin_surface
+                    else None
+                )
                 return _security_rejection(
                     security=security,
                     request_id=request_id,
@@ -624,6 +776,7 @@ def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> Non
                     status_code=400,
                     detail="Host is not allowed",
                     api_response=api_response,
+                    content={"detail": host_hint} if host_hint else None,
                 )
         if security.require_https and request.url.path != "/health" and not security.request_is_https(request):
             return _security_rejection(
@@ -642,7 +795,20 @@ def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> Non
                     normalized_origin = _origin(origin, label="Origin")[0]
                 except RuntimeError:
                     normalized_origin = ""
-                if normalized_origin not in security.allowed_origins and normalized_origin != request_origin:
+                origin_allowed = (
+                    normalized_origin in security.allowed_origins
+                    or normalized_origin == request_origin
+                    or (
+                        security.origin_allow_same_host
+                        and _origin_same_host(normalized_origin, request_origin)
+                    )
+                )
+                if not origin_allowed:
+                    admin_hint = (
+                        _admin_origin_hint(normalized_origin, request_origin)
+                        if security.admin_surface
+                        else None
+                    )
                     return _security_rejection(
                         security=security,
                         request_id=request_id,
@@ -650,8 +816,25 @@ def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> Non
                         status_code=403,
                         detail="Origin is not allowed",
                         api_response=api_response,
+                        content={"detail": admin_hint} if admin_hint else None,
+                        log_context=(
+                            f"origin={normalized_origin!r} expected={request_origin!r}"
+                            if security.admin_surface
+                            else ""
+                        ),
                     )
             elif SESSION_COOKIE_NAME in request.cookies and not request.headers.get("authorization"):
+                admin_hint = (
+                    {
+                        "code": "admin_origin_missing",
+                        "message": (
+                            "缺少 Origin 请求头：携带会话 Cookie 的写请求必须带 Origin。"
+                            "请勿在浏览器扩展/代理中剥离 Origin、Referer 请求头后重试。"
+                        ),
+                    }
+                    if security.admin_surface
+                    else None
+                )
                 return _security_rejection(
                     security=security,
                     request_id=request_id,
@@ -659,6 +842,7 @@ def install_public_security(app: FastAPI, security: PublicSecurityConfig) -> Non
                     status_code=403,
                     detail="Origin header is required",
                     api_response=api_response,
+                    content={"detail": admin_hint} if admin_hint else None,
                 )
 
         response = await call_next(request)

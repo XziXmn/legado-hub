@@ -3550,7 +3550,7 @@ def _subscription_links_for_access_code(access_code: str, request: Request) -> d
 
     public = ensure_reader_entrypoint_origin(effective_public_base_url())
     try:
-        request_base = ensure_reader_entrypoint_origin(get_public_base_url(request))
+        request_base = ensure_reader_entrypoint_origin(get_public_base_url(request), request=request)
     except Exception:
         request_base = ""
     lan = ""

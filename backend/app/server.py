@@ -17,6 +17,48 @@ from app.core.public_security import (
 from app.main import EntryPoint, create_app
 
 
+def _uvicorn_log_config() -> dict:
+    """Send uvicorn access logs to stderr like every other log source.
+
+    Synology Container Manager / Portainer web UIs fail to render json-file
+    logs whose entries mix stdout and stderr stream types; keeping a single
+    stream makes the container logs visible there. ``docker logs`` is
+    unaffected either way.
+    """
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": "uvicorn.logging.DefaultFormatter",
+                "fmt": "%(levelprefix)s %(message)s",
+                "use_colors": None,
+            },
+            "access": {
+                "()": "uvicorn.logging.AccessFormatter",
+                "fmt": '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+            },
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stderr",
+            },
+            "access": {
+                "class": "logging.StreamHandler",
+                "formatter": "access",
+                "stream": "ext://sys.stderr",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"level": "INFO"},
+            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+        },
+    }
+
+
 class PortDispatchApp:
     """Dispatch HTTP and WebSocket scopes by the local listening port."""
 
@@ -90,12 +132,14 @@ def _port(value: str) -> int:
 def run(*, host: str, public_port: int, admin_port: int) -> None:
     """Bind both sockets and serve them with one ASGI lifespan."""
     application = build_dispatch_app(public_port=public_port, admin_port=admin_port)
+    log_config = _uvicorn_log_config()
     public_config = uvicorn.Config(
         application,
         host=host,
         port=public_port,
         proxy_headers=False,
         server_header=False,
+        log_config=log_config,
     )
     admin_config = uvicorn.Config(
         application,
@@ -103,6 +147,7 @@ def run(*, host: str, public_port: int, admin_port: int) -> None:
         port=admin_port,
         proxy_headers=False,
         server_header=False,
+        log_config=log_config,
     )
     sockets: list[socket.socket] = []
     try:

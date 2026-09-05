@@ -208,7 +208,12 @@ def create_app(
             if xf_proto in {"http", "https"}:
                 scheme = xf_proto
             qs = request.url.query
-            target = f"{scheme}://{host}:{config.PORT}/api/auth/access/enter"
+            from app.core.public_security import ensure_reader_entrypoint_origin
+
+            reader_base = ensure_reader_entrypoint_origin(
+                f"{scheme}://{host}:{config.ADMIN_PORT}", request=request
+            )
+            target = f"{reader_base}/api/auth/access/enter"
             if qs:
                 target = f"{target}?{qs}"
             return RedirectResponse(url=target, status_code=307)

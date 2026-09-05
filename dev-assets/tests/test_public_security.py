@@ -379,3 +379,147 @@ def test_cookie_store_rejects_path_traversal_and_uses_private_modes(tmp_path) ->
     if os.name != "nt":
         assert stat.S_IMODE(store.base_dir.stat().st_mode) == 0o700
         assert stat.S_IMODE(store.path_for("safe_plugin").stat().st_mode) == 0o600
+
+
+# ---- Reader entrypoint origins under Docker port mappings ----
+
+
+def _request_for_app(
+    app,
+    *,
+    host: str,
+    scheme: str = "http",
+    client=("192.168.31.9", 50000),
+    extra_headers=(),
+):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "app": app,
+        "scheme": scheme,
+        "http_version": "1.1",
+        "server": ("192.168.31.5", 8766),
+        "client": tuple(client),
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "headers": [(b"host", host.encode()), *extra_headers],
+    }
+    return Request(scope)
+
+
+def test_reader_origin_rewrite_rewrites_only_admin_port_without_config(monkeypatch) -> None:
+    from app.core.public_security import ensure_reader_entrypoint_origin
+
+    _clear_network_config(monkeypatch)
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:8765"
+    )
+    # Non-admin origins pass through untouched.
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:4390")
+        == "http://192.168.31.5:4390"
+    )
+    assert (
+        ensure_reader_entrypoint_origin("https://books.example.test")
+        == "https://books.example.test"
+    )
+
+
+def test_reader_origin_rewrite_honors_reader_external_origin_env(monkeypatch) -> None:
+    from app.core.public_security import ensure_reader_entrypoint_origin
+
+    _clear_network_config(monkeypatch)
+    monkeypatch.setenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "http://192.168.31.5:4390")
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:4390"
+    )
+    # Bare port form applies to the base origin's host.
+    monkeypatch.setenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "4390")
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:4390"
+    )
+    # Invalid values fall back to the legacy same-host reader port.
+    monkeypatch.setenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "not-a-port")
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:8765"
+    )
+
+
+def test_reader_origin_rewrite_uses_matching_public_base_url(monkeypatch) -> None:
+    from app.core.public_security import ensure_reader_entrypoint_origin
+
+    _clear_network_config(monkeypatch)
+    monkeypatch.setenv("LEGADOHUB_PUBLIC_BASE_URL", "http://192.168.31.5:4390")
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:4390"
+    )
+    # A public-domain 公网地址 must not leak into a LAN origin's rewrite.
+    monkeypatch.setenv("LEGADOHUB_PUBLIC_BASE_URL", "https://books.example.test")
+    assert (
+        ensure_reader_entrypoint_origin("http://192.168.31.5:8766")
+        == "http://192.168.31.5:8765"
+    )
+
+
+def test_admin_console_request_origin_rewrites_to_external_reader(monkeypatch) -> None:
+    from app.core.public_security import load_admin_security_config, reading_base_url
+
+    monkeypatch.setenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", "http://192.168.31.5:4390")
+    admin_app = create_app(
+        load_admin_security_config(),
+        entrypoint=EntryPoint.ADMIN,
+        manage_runtime=False,
+    )
+    request = _request_for_app(admin_app, host="192.168.31.5:4391")
+    assert reading_base_url(request) == "http://192.168.31.5:4390"
+
+    # Without the declaration the legacy internal-port fallback applies.
+    monkeypatch.delenv("LEGADOHUB_READER_EXTERNAL_ORIGIN", raising=False)
+    request = _request_for_app(admin_app, host="192.168.31.5:4391")
+    assert reading_base_url(request) == "http://192.168.31.5:8765"
+
+
+def test_reader_surface_request_origin_is_used_verbatim(monkeypatch) -> None:
+    from app.core.public_security import load_public_security_config, reading_base_url
+
+    _clear_network_config(monkeypatch)
+    reader_app = create_app(
+        load_public_security_config(),
+        entrypoint=EntryPoint.PUBLIC,
+        manage_runtime=False,
+    )
+    request = _request_for_app(
+        reader_app,
+        host="192.168.31.5:4390",
+        client=("192.168.31.9", 50000),
+    )
+    assert reading_base_url(request) == "http://192.168.31.5:4390"
+
+
+def test_dynamic_admin_config_trusts_private_proxies_by_default(monkeypatch) -> None:
+    from starlette.datastructures import Headers
+
+    _clear_network_config(monkeypatch)
+    security = load_admin_security_config()
+    assert security.admin_surface is True
+    assert security.origin_allow_same_host is True
+    assert security.is_trusted_proxy("127.0.0.1") is True
+    assert security.is_trusted_proxy("172.17.0.5") is True
+    assert security.is_trusted_proxy("192.168.31.1") is True
+
+    proxied = SimpleNamespace(
+        client=SimpleNamespace(host="172.17.0.5"),
+        url=SimpleNamespace(scheme="http"),
+        headers=Headers({"X-Forwarded-Proto": "https"}),
+    )
+    assert security.request_is_https(proxied) is True
+    # Public surface keeps the loopback-only default.
+    reader_security = load_public_security_config()
+    assert reader_security.is_trusted_proxy("172.17.0.5") is False
