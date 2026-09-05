@@ -19,7 +19,7 @@ COOKIE_DIR = CONFIG_DIR / "cookies"
 FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 
 APP_NAME = "LegadoHub"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 APP_PHASE = "plugin-runtime-stage-3"
 
 HOST = "127.0.0.1"

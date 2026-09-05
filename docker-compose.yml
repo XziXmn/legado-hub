@@ -3,13 +3,13 @@ services:
   # 入口以 root 启动，按 PUID/PGID 修正挂载权限后降权运行
   #
   # 镜像通道（二选一，勿混用心态）：
-  #   latest / v0.3.0  — 正式发行（默认 latest = 当前正式版）
+  #   latest / v0.3.1  — 正式发行（默认 latest = 当前正式版）
   #   beta             — 开发测试，随 main 滚动，可能不稳定
   #   sha-<commit>     — 钉死某次构建，便于回滚
   legadohub:
     image: xzixmn/legado-hub:latest
     # image: xzixmn/legado-hub:beta          # 开发测试机
-    # image: xzixmn/legado-hub:v0.3.0        # 钉死正式版
+    # image: xzixmn/legado-hub:v0.3.1        # 钉死正式版
     container_name: legadohub
     restart: always
     init: true

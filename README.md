@@ -34,12 +34,12 @@ LegadoHub 的做法是把这些麻烦事集中到服务端：**书源由管理�
 
 | 通道 | 标签 | 何时更新 | 用途 |
 |------|------|----------|------|
-| **正式** | `v0.3.0`、`latest` | 打 Git tag `v*` 之后 | 长期运行 / 对外推荐 |
+| **正式** | `v0.3.1`、`latest` | 打 Git tag `v*` 之后 | 长期运行 / 对外推荐 |
 | **开发测试** | `beta` | 每次推送到 `main` | 试新功能 |
 
 ```bash
 docker pull xzixmn/legado-hub:latest   # 正式
-docker pull xzixmn/legado-hub:v0.3.0   # 钉死正式版
+docker pull xzixmn/legado-hub:v0.3.1   # 钉死正式版
 docker pull xzixmn/legado-hub:beta     # 开发测试
 ```
 
@@ -309,6 +309,47 @@ docker compose exec -T legadohub \
 <summary>公网访问与「公网书源地址」是一回事吗？</summary>
 
 不是。谁能连上服务看防火墙/雷池/反代；「公网书源地址」只决定发给用户的链接里写哪个公网 origin。
+</details>
+
+<details>
+<summary>改了 Docker 端口映射（如 <code>4390:8765</code>、<code>4391:8766</code>），书源/订阅链接还是旧端口？</summary>
+
+后端只能看到容器内端口（8765/8766），无法自动发现宿主机映射后的对外端口。声明一次即可：
+
+```yaml
+environment:
+  - LEGADOHUB_READER_EXTERNAL_ORIGIN=http://192.168.31.5:4390   # 或只写端口 4390
+```
+
+也可以是完整 origin（域名 + 端口）。配置后，管理后台生成的专属链接、书源里的「订阅 / 书库」入口、以及 `8766` 上旧书源兼容跳转都会改用这个对外阅读地址。改完重启容器，并让读者**重新导入书源链接**（旧链接里的端口已经固化，不会自动更新）。
+</details>
+
+<details>
+<summary>管理后台 8766 登录一直提示密码错误（经反向代理 / HTTPS 访问）？</summary>
+
+先确认不是密码本身的问题：日志里若出现 `Security request rejected: event=origin_rejected`，就是来源校验未通过，浏览器提交的 Origin 与后端识别的地址不一致，与密码无关。修法（任选其一）：
+
+1. 反代透传 Host 与协议：
+
+```nginx
+proxy_set_header Host $http_host;          # 用 $http_host 保留端口
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+管理口默认已信任内网网段（127.0.0.1、10/8、172.16/12、192.168/16 等）转发的真实 IP 与协议；被拒时管理后台会直接提示双方的 Origin 并给出对应配置项，也可显式设置：
+
+```yaml
+environment:
+  - LEGADOHUB_ADMIN_ALLOWED_ORIGINS=https://nas.example.com,http://192.168.31.5:4391
+```
+
+2. 设置了 `LEGADOHUB_ADMIN_BASE_URL` 的部署，访问地址必须与之一致，或删除该变量恢复动态适配。
+</details>
+
+<details>
+<summary>群晖 Container Manager / Portainer 网页端显示「无可用日志」？</summary>
+
+`docker logs legado-hub`（SSH 命令行）始终可用。部分版本的群晖 / Portainer 网页端解析同时包含 stdout 与 stderr 的 json 日志文件存在缺陷；新版镜像已将所有日志统一输出到单一流，网页端可正常显示，旧版本建议升级或用命令行查看。
 </details>
 
 ---
