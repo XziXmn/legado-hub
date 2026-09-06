@@ -34,12 +34,12 @@ LegadoHub 的做法是把这些麻烦事集中到服务端：**书源由管理�
 
 | 通道 | 标签 | 何时更新 | 用途 |
 |------|------|----------|------|
-| **正式** | `v0.3.1`、`latest` | 打 Git tag `v*` 之后 | 长期运行 / 对外推荐 |
+| **正式** | `v0.3.2`、`latest` | 打 Git tag `v*` 之后 | 长期运行 / 对外推荐 |
 | **开发测试** | `beta` | 每次推送到 `main` | 试新功能 |
 
 ```bash
 docker pull xzixmn/legado-hub:latest   # 正式
-docker pull xzixmn/legado-hub:v0.3.1   # 钉死正式版
+docker pull xzixmn/legado-hub:v0.3.2   # 钉死正式版
 docker pull xzixmn/legado-hub:beta     # 开发测试
 ```
 
