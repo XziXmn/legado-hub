@@ -6,6 +6,7 @@ Routes through httpx with timeout, proxy, cookie, and trace controls.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import threading
 from typing import Any
@@ -26,6 +27,23 @@ from app.source_plugins.challenges import looks_like_browser_challenge, looks_li
 
 
 _SHARED_CLIENTS: dict[tuple[int, int, str], httpx.AsyncClient] = {}
+
+logger = logging.getLogger(__name__)
+
+# httpx raises ImportError at client construction when http2=True without the
+# optional h2 extra (requirements declare httpx[http2,...], but a dependency
+# drift once dropped the transitive h2 and bricked every plugin fetch). Detect
+# availability once and degrade to HTTP/1.1 instead of failing all requests.
+try:
+    import h2  # noqa: F401
+
+    _HTTP2_AVAILABLE = True
+except ImportError:
+    _HTTP2_AVAILABLE = False
+    logger.warning(
+        "h2 package is not installed; plugin fetches fall back to HTTP/1.1. "
+        "Install httpx with the http2 extra (pip install 'httpx[http2]')."
+    )
 
 
 def _shared_client_key(proxy_url: str) -> tuple[int, int, str]:
@@ -54,7 +72,7 @@ def _build_async_client(proxy_url: str, timeout: float) -> httpx.AsyncClient:
         timeout=httpx.Timeout(timeout),
         mounts=mounts,
         follow_redirects=True,
-        http2=True,
+        http2=_HTTP2_AVAILABLE,
         limits=httpx.Limits(
             max_connections=100,
             max_keepalive_connections=20,
