@@ -66,6 +66,7 @@ from app.services.library_books import library_books_service
 DEFAULT_WORKFLOW = DEFAULT_CONTENT_WORKFLOW
 CROSS_SOURCE_INITIAL_COMPARE_COUNT = 3
 CROSS_SOURCE_MAX_COMPARE_COUNT = 8
+CANDIDATE_TITLE_MAX_INDEX_DRIFT = 30
 
 TRACE_BLOCK_RE = re.compile(
     r"(?:\n|^)(?:<!--\s*)?LEGADOHUB_TRACE_BEGIN\s*(?:```yaml\s*)?\n.*?\n(?:\s*```\s*)?LEGADOHUB_TRACE_END(?:\s*-->)?\s*$",
@@ -4527,53 +4528,51 @@ class AggregateProcessor:
         target_index: int,
         target_title: str,
     ) -> list[dict[str, Any]]:
-        title_matches: list[tuple[tuple[int, float, int], dict[str, Any]]] = []
+        title_matches: list[tuple[tuple[int, float, int], int, dict[str, Any]]] = []
         index_fallbacks: list[tuple[int, dict[str, Any]]] = []
         target_ordinal = self._chapter_ordinal_from_title(target_title)
-        for ch in cand_chapters:
+        for position, ch in enumerate(cand_chapters, start=1):
             if not isinstance(ch, dict):
                 continue
-            ch_index = int(ch.get("index") or 0)
+            ch_index = int(ch.get("index") or position)
+            index_gap = abs(ch_index - int(target_index or 0))
+            if target_index and index_gap > CANDIDATE_TITLE_MAX_INDEX_DRIFT:
+                continue
             title = str(ch.get("title", "") or "")
             rank = self._candidate_title_match_rank(target_title, title)
             if rank is not None:
-                title_matches.append((rank, ch))
+                title_matches.append((rank, index_gap, ch))
                 continue
             candidate_ordinal = self._chapter_ordinal_from_title(title)
             if (
                 ch_index
                 and target_index
-                and abs(ch_index - target_index) <= 2
+                and index_gap <= 2
                 and (target_ordinal is None or candidate_ordinal is None)
             ):
-                index_fallbacks.append((abs(ch_index - target_index), ch))
+                index_fallbacks.append((index_gap, ch))
         title_matches.sort(
             key=lambda item: (
                 item[0][0],
                 -item[0][1],
+                item[1],
                 item[0][2],
-                abs(int(item[1].get("index") or 0) - int(target_index or 0)),
             )
         )
         if title_matches:
-            return [item[1] for item in title_matches[:3]]
+            return [item[2] for item in title_matches[:3]]
         index_fallbacks.sort(key=lambda item: item[0])
         return [item[1] for item in index_fallbacks[:3]]
-
-    @staticmethod
-    def _strip_chapter_ordinal_prefix(title: str) -> str:
-        return re.sub(
-            r"^\s*第[零〇一二两三四五六七八九十百千万\d]+[章节回卷篇部集]\s*[:：、.．\-_·]*",
-            "",
-            str(title or ""),
-        ).strip()
 
     def _candidate_title_match_rank(
         self,
         target_title: str,
         candidate_title: str,
     ) -> tuple[int, float, int] | None:
-        from app.services.aggregate_alignment import chapter_title_similarity
+        from app.services.aggregate_alignment import (
+            chapter_name_similarity,
+            chapter_title_similarity,
+        )
 
         if not target_title or not candidate_title:
             return None
@@ -4582,20 +4581,16 @@ class AggregateProcessor:
         candidate_ordinal = self._chapter_ordinal_from_title(candidate_title)
         if target_ordinal is not None and candidate_ordinal is not None:
             ordinal_gap = abs(target_ordinal - candidate_ordinal)
-            # Mirrors sometimes renumber chapters (inserted extras / merged
-            # splits). When the chapter name matches but the ordinal is a few
-            # off, that is the same chapter under a different numbering scheme;
-            # rank it above an ordinal-near entry whose name differs.
-            target_name = self._strip_chapter_ordinal_prefix(target_title)
-            candidate_name = self._strip_chapter_ordinal_prefix(candidate_title)
-            if target_name and candidate_name:
-                name_similarity = chapter_title_similarity(target_name, candidate_name)
-                if name_similarity >= 0.8 and ordinal_gap <= 5:
-                    return (0, name_similarity, ordinal_gap)
+            # A mirror may number chapters across the whole book while the
+            # official TOC restarts at each volume. The TOC index bounds this
+            # name match before we use it as a snapshot or live candidate.
+            name_similarity = chapter_name_similarity(target_title, candidate_title)
+            if name_similarity >= 0.8:
+                return (0, name_similarity, ordinal_gap)
             if similarity >= 0.75 and ordinal_gap <= 5:
-                return (0, similarity, ordinal_gap)
-            if ordinal_gap <= 2:
                 return (1, similarity, ordinal_gap)
+            if ordinal_gap <= 2:
+                return (2, similarity, ordinal_gap)
             return None
         if similarity >= 0.75:
             return (0, similarity, 0)

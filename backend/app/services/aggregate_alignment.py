@@ -129,6 +129,24 @@ def chapter_title_similarity(expected_title: str, candidate_title: str) -> float
     return _title_similarity(expected_title, candidate_title)
 
 
+_CHAPTER_ORDINAL_PREFIX = re.compile(
+    r"^\s*第\s*[零〇一二两三四五六七八九十百千万\d]+\s*[章节回卷篇部集]\s*[:：、.．\-_·]*"
+)
+
+
+def chapter_name_similarity(expected_title: str, candidate_title: str) -> float:
+    """Compare descriptive names when both titles have chapter ordinals."""
+    expected = str(expected_title or "")
+    candidate = str(candidate_title or "")
+    if not _CHAPTER_ORDINAL_PREFIX.match(expected) or not _CHAPTER_ORDINAL_PREFIX.match(candidate):
+        return 0.0
+    expected_name = _CHAPTER_ORDINAL_PREFIX.sub("", expected).strip()
+    candidate_name = _CHAPTER_ORDINAL_PREFIX.sub("", candidate).strip()
+    if not expected_name or not candidate_name:
+        return 0.0
+    return _title_similarity(expected_name, candidate_name)
+
+
 def _candidate_body_head(candidate_title: str, candidate_content: str) -> str:
     stripped = str(candidate_content or "").strip()
     if not stripped:
@@ -540,7 +558,10 @@ def align_candidate_chapter(
             "alignmentReason": "no_preview_available",
         }
 
-    title_sim = _title_similarity(expected_title, candidate_title)
+    title_sim = max(
+        _title_similarity(expected_title, candidate_title),
+        chapter_name_similarity(expected_title, candidate_title),
+    )
     preview_sim = _sliding_preview_similarity(official_preview, candidate_content)
     head_sim = _sequence_similarity(
         official_preview[:PREVIEW_PREFERRED_MAX],
