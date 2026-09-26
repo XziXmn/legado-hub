@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services.aggregate_processor import AggregateProcessor
+from app.services.aggregate_alignment import align_candidate_chapter
 from app.services.aggregate_line_consensus import purify_by_line_consensus
 from app.services.aggregate_settings import PROCESSING_PLACEHOLDER
 from app.services.catalog import Catalog
@@ -1622,6 +1623,61 @@ def test_candidate_toc_matching_prefers_title_over_wrong_index(tmp_path):
     )
 
     assert [item["title"] for item in matches] == ["第356章 小心没用，白天也滑"]
+
+
+@pytest.mark.parametrize(
+    ("target_index", "candidate_index"),
+    [(245, 244), (502, 501), (678, 677)],
+)
+def test_candidate_toc_matches_renumbered_volume_opening(
+    tmp_path, target_index, candidate_index,
+):
+    processor = AggregateProcessor(tmp_path / "test.db")
+    chapters = [
+        {"index": 1, "title": "第1章 卷首", "chapterId": "first-volume"},
+        {"index": candidate_index, "title": f"第{candidate_index}章 卷首", "chapterId": "right-volume"},
+        {"index": target_index, "title": f"第{target_index}章 另一件事", "chapterId": "wrong-name"},
+    ]
+
+    matches = processor._match_candidate_toc_entries(
+        cand_chapters=chapters,
+        target_index=target_index,
+        target_title="第1章 卷首",
+    )
+
+    assert matches[0]["chapterId"] == "right-volume"
+    assert processor._match_snapshot_candidate_chapter(
+        source_chapters=chapters,
+        chapter_index=target_index,
+        title="第1章 卷首",
+    )["chapterId"] == "right-volume"
+
+
+def test_candidate_toc_rejects_distant_duplicate_without_nearby_match(tmp_path):
+    processor = AggregateProcessor(tmp_path / "test.db")
+
+    assert processor._match_candidate_toc_entries(
+        cand_chapters=[{"index": 1, "title": "第1章 卷首"}],
+        target_index=245,
+        target_title="第1章 卷首",
+    ) == []
+
+
+def test_candidate_alignment_accepts_same_name_after_volume_renumbering():
+    preview = "天地玄黄宇宙洪荒" * 25
+    content = preview[:150] + "山" * 50 + "后续正文" * 60
+
+    result = align_candidate_chapter(
+        official_preview=preview,
+        candidate_title="第244章 卷首",
+        candidate_content=content,
+        expected_title="第1章 卷首",
+    )
+
+    assert result["alignmentPassed"] is True
+    assert result["titleSimilarity"] == 1.0
+    assert result["alignmentReason"] == "title_and_preview_matched"
+    assert result["previewSimilarity"] < 0.88
 
 
 def test_candidate_snapshot_rejects_mismatched_saved_title(tmp_path):
