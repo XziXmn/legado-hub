@@ -13,7 +13,7 @@ capabilities:
   - detail
   - toc
   - chapter
-enabled: true
+enabled: false
 rateLimit:
   perHostConcurrency: 6
   minIntervalMs: 1000
