@@ -28,8 +28,8 @@ from app.core.public_security import (
 # - FORMAL app release (git tag vX.Y.Z): bump BOTH — version (shown in name /
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.32"
-# Last beta marker: header no-ajax so login sheet can open (ms). Bump this alone for tests.
-_READER_RULE_RELEASED_AT_MS = 1790557138945
+# Last beta marker: Legado Max review bubbles (ms). Bump this alone for tests.
+_READER_RULE_RELEASED_AT_MS = 1790769266618
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -702,25 +702,36 @@ def _build_source(
     base_api: str | None = None,
     *,
     access_code: str | None = None,
+    reader: str = "x",
 ) -> dict:
     base_api = normalize_public_base_url(base_api or get_public_base_url())
     book_source_url, name, group, is_lan = _source_identity_for_base(base_api)
+    if reader == "max":
+        book_source_url += "-Max"
+        name += "·Max"
+        group += ",Legado-Max"
     app_config = AppConfig.get()
     chapter_comment = app_config.chapter_comment
     bound = bool(str(access_code or "").strip())
 
     explore_url = _explore_url_rule(base_api)
     network_note = (
-        "本条为内网书源（bookSourceUrl=LegadoHub-LAN），可与公网书源并存；"
+        f"本条为内网书源（bookSourceUrl={book_source_url}），可与公网书源并存；"
         if is_lan
-        else "本条为公网书源（bookSourceUrl=LegadoHub），可与内网书源并存；"
+        else f"本条为公网书源（bookSourceUrl={book_source_url}），可与内网书源并存；"
     )
     bind_note = (
         "专属书源：搜索/目录/正文自动鉴权；登录页提供「订阅 / 书库」入口。"
         if bound
         else "请使用管理员发放的专属书源链接导入。"
     )
-    return {
+    reader_note = "本书源在正文显示可点击段评气泡；" if reader == "max" else "本书源使用 Legado-X 段评协议；"
+    review_bubble_query = (
+        '  contentUrl += (contentUrl.indexOf("?") >= 0 ? "&" : "?") + "reviewBubbles=1";\n'
+        if reader == "max"
+        else ""
+    )
+    source = {
         "bookSourceName": f"{name}({_READER_RULE_VERSION})",
         "bookSourceGroup": group,
         "bookSourceUrl": book_source_url,
@@ -738,6 +749,7 @@ def _build_source(
             f"规则版本 {_READER_RULE_VERSION}。"
             f"{network_note}"
             f"{bind_note}"
+            f"{reader_note}"
             "搜索同时显示已发布共享书和启用的第三方书源；官方源仍只用于后台聚合，"
             "新增订阅及运维操作统一在 Web Console 完成。"
         ),
@@ -807,7 +819,8 @@ def _build_source(
             'try {\n'
             '  contentUrl = String(java.hexDecodeToString(payload) || "").trim();\n'
             '  try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e0) {}\n'
-            '  if (/^https?:\\/\\//i.test(contentUrl)) {\n'
+            + review_bubble_query
+            + '  if (/^https?:\\/\\//i.test(contentUrl)) {\n'
             '    try {\n'
             '      payload = String(legadoHubAjax(contentUrl) || "");\n'
             '    } catch (eAjax) {\n'
@@ -856,6 +869,9 @@ def _build_source(
         },
         "jsLib": _reader_js_lib(base_api, access_code=access_code),
     }
+    if reader == "max":
+        source["ruleContent"].pop("chapterComment")
+    return source
 
 
 def generate_legado_source(
@@ -863,7 +879,10 @@ def generate_legado_source(
     *,
     access_code: str | None = None,
 ) -> list[dict]:
-    return [_build_source(base_api, access_code=access_code)]
+    return [
+        _build_source(base_api, access_code=access_code),
+        _build_source(base_api, access_code=access_code, reader="max"),
+    ]
 
 
 def write_legado_source() -> str:

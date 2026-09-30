@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.config import DB_PATH, HOST, PORT
+from app.services.aggregate_alignment import chapter_name_similarity
 from app.services.aggregate_settings import AggregateSettingsRepository
 from app.services.aggregate_virtual_source import (
     VIRTUAL_SOURCE_ID,
@@ -60,6 +61,21 @@ def format_reading_update_time(value: Any) -> str:
     except ValueError:
         return normalized
     return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def strip_leading_duplicate_chapter_title(content: str, title: str) -> str:
+    """Drop a source heading when its name matches the published chapter title."""
+    first_line, separator, remainder = content.partition("\n")
+    if not separator or not remainder.strip():
+        return content
+    heading = first_line.strip().removeprefix("#").strip()
+    published = str(title or "").strip()
+    if not heading or not published:
+        return content
+    exact = re.sub(r"\s+", "", heading) == re.sub(r"\s+", "", published)
+    if exact or chapter_name_similarity(published, heading) == 1.0:
+        return remainder.lstrip("\n")
+    return content
 
 
 def _normalize_book_status_text(*values: object) -> str:
@@ -1811,6 +1827,7 @@ class LibraryBooksService:
         if body.startswith("# "):
             lines = body.split("\n", 1)
             body = lines[1].strip() if len(lines) > 1 else ""
+        body = strip_leading_duplicate_chapter_title(body, str(target.get("title", "") or ""))
         if not body or "\ufffd" in body or "\x00" in body:
             return None
 

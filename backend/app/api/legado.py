@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from app.services.catalog import Catalog
 from app.services.library_books import format_reading_update_time, library_books_service
+from app.services.legado_max_bubbles import decorate_legado_max_content
 from app.services.aggregate_virtual_source import VIRTUAL_SOURCE_ID
 from app.source_plugins.id_codec import (
     decode_book_id,
@@ -392,9 +393,11 @@ async def get_toc(request: Request, book_id: str) -> dict:
 
 
 @router.get("/chapter/{chapter_id}")
-async def get_chapter(request: Request, chapter_id: str) -> dict:
+async def get_chapter(request: Request, chapter_id: str, reviewBubbles: str | None = None) -> dict:
     user = auth_service.require_reading_user(request, touch=False)
-    _reject_query_anomalies(request, {"lane"})
+    _reject_query_anomalies(request, {"lane", "reviewBubbles"})
+    if reviewBubbles not in (None, "1"):
+        raise HTTPException(status_code=422, detail="reviewBubbles 无效")
     chapter_id = _validated_external_id(chapter_id, label="章节")
     source_id, chapter_url = _decode_chapter_identity(chapter_id)
     with reading_access_limiter.guard(user.user_id, "chapter"):
@@ -411,23 +414,35 @@ async def get_chapter(request: Request, chapter_id: str) -> dict:
                 apply_purify=False,
             )
             shared = {**shared, "content": content}
-            return _public_chapter_response(shared, chapter_id=chapter_id)
-        _require_third_party_plugin(
-            catalog,
-            source_id,
-            "chapter",
-            label="章节",
-            target_url=chapter_url,
-        )
-        result = await catalog.chapter(chapter_id)
-        content = await _apply_reading_content_gates(
-            chapter_id=chapter_id,
-            content=str(result.get("content", "") or ""),
-            source_id=source_id,
-            catalog=catalog,
-        )
-        result = {**result, "content": content}
-        return _public_chapter_response(result, chapter_id=chapter_id)
+            result = shared
+        else:
+            _require_third_party_plugin(
+                catalog,
+                source_id,
+                "chapter",
+                label="章节",
+                target_url=chapter_url,
+            )
+            result = await catalog.chapter(chapter_id)
+            content = await _apply_reading_content_gates(
+                chapter_id=chapter_id,
+                content=str(result.get("content", "") or ""),
+                source_id=source_id,
+                catalog=catalog,
+            )
+            result = {**result, "content": content}
+        response = _public_chapter_response(result, chapter_id=chapter_id)
+        if reviewBubbles == "1":
+            try:
+                with reading_access_limiter.guard(user.user_id, "reviews"):
+                    reviews = await _chapter_reviews(chapter_id, catalog=catalog)
+                view_url = f"{get_public_base_url(request)}/api/legado/chapter/{chapter_id}/reviews/view"
+                response["content"] = decorate_legado_max_content(
+                    response["content"], reviews, view_url=view_url
+                )
+            except Exception:
+                logger.warning("Unable to decorate Legado Max reviews for %s", chapter_id, exc_info=True)
+        return response
 
 
 @router.get("/chapter/{chapter_id}/reviews")

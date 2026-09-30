@@ -519,11 +519,13 @@ def test_personal_legado_source_embeds_bound_access_code() -> None:
     )
     assert response.status_code == 200
     sources = response.json()
-    assert len(sources) == 1
+    assert len(sources) == 2
+    assert [source["bookSourceUrl"] for source in sources] == ["LegadoHub-LAN", "LegadoHub-LAN-Max"]
     source = sources[0]
     code_literal = json.dumps(created["accessCode"], ensure_ascii=False)
-    assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["loginUrl"]
-    assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["jsLib"]
+    for source in sources:
+        assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["loginUrl"]
+        assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["jsLib"]
     assert "legadoHubOpenSubscriptions" in source["loginUi"]
     assert "legadoHubOpenLibrary" in source["loginUi"]
     assert "专属" in source["bookSourceComment"] or "自动鉴权" in source["bookSourceComment"]

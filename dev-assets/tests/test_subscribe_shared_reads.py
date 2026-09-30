@@ -1183,6 +1183,14 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
         conn.commit()
 
     source = generate_legado_source("http://testserver")[0]
+    max_source = generate_legado_source("http://testserver")[1]
+    assert max_source["bookSourceUrl"] == "LegadoHub-LAN-Max"
+    assert "·Max" in max_source["bookSourceName"]
+    assert "Legado-Max" in max_source["bookSourceGroup"]
+    assert "reviewBubbles=1" in max_source["ruleContent"]["content"]
+    assert "reviewBubbles=1" not in source["ruleContent"]["content"]
+    assert "chapterComment" not in max_source["ruleContent"]
+    assert max_source["loginUrl"] == source["loginUrl"]
     assert source["searchUrl"].startswith("@js:")
     assert 'var _base = "http://testserver"' in source["searchUrl"]
     assert "/api/subscribe/legado/search" in source["searchUrl"]
@@ -1328,6 +1336,35 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert free.json()["isVip"] is False
     assert len(markdown_reads) == 1
 
+    async def one_review(_chapter_id: str, **_kwargs) -> dict:
+        return {
+            "hotParagraphReviews": [{
+                "paragraphId": 12,
+                "matchedParagraphIndex": 0,
+                "matchedParagraphCount": 1,
+                "matchedText": "完整免费正文",
+                "commentCount": 7,
+            }],
+            "chapterEnd": [],
+            "chapterEndHot": [],
+            "summary": {},
+        }
+
+    monkeypatch.setattr(legado_api, "_chapter_reviews", one_review)
+    max_free = client.get(
+        chapters[0]["chapterUrl"].replace("http://testserver", ""),
+        params={"reviewBubbles": "1"},
+    )
+    assert max_free.status_code == 200
+    assert "bubble://paragraph?num=7&status=normal&v=1" in max_free.json()["content"]
+    assert "paragraphId=12" in max_free.json()["content"]
+    assert "bubble://" not in free.json()["content"]
+    assert client.get(
+        chapters[0]["chapterUrl"].replace("http://testserver", ""),
+        params={"reviewBubbles": "wrong"},
+    ).status_code == 422
+    monkeypatch.setattr(legado_api, "_chapter_reviews", empty_reviews)
+
     preview = client.get(chapters[-1]["chapterUrl"].replace("http://testserver", ""))
     assert preview.status_code == 200
     assert "付费预览正文" in preview.json()["content"]
@@ -1336,7 +1373,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert preview.json()["isPay"] is False
     assert preview.json()["extra"]["previewOnly"] is True
     assert preview.json()["previewOnly"] is True
-    assert len(markdown_reads) == 2
+    assert len(markdown_reads) == 3
 
     with sqlite3.connect(db) as conn:
         after = {
@@ -1363,6 +1400,73 @@ def test_known_official_free_short_chapter_is_not_misclassified_as_preview():
     )
 
     assert result["classification"] == "full"
+
+
+def test_shared_chapter_strips_only_matching_leading_source_title():
+    from app.services.library_books import strip_leading_duplicate_chapter_title
+
+    body = "第477章 看不见的手\n\n短暂晕眩后，贝塔表现出强烈的食欲。"
+    assert strip_leading_duplicate_chapter_title(body, "第234章 看不见的手") == body.split("\n\n", 1)[1]
+    assert strip_leading_duplicate_chapter_title("第234章 看不见的手\n\n正文", "第234章 看不见的手") == "正文"
+    assert strip_leading_duplicate_chapter_title(body, "第234章 另一只手") == body
+    assert strip_leading_duplicate_chapter_title("正文\n\n第477章 看不见的手", "第234章 看不见的手") == "正文\n\n第477章 看不见的手"
+
+
+def test_legado_max_bubbles_preserve_paragraphs_and_click_targets():
+    import base64
+    import re
+    from xml.etree import ElementTree
+
+    from app.services.legado_max_bubbles import decorate_legado_max_content
+
+    view_url = "https://books.example.test/api/legado/chapter/source:chapter/reviews/view"
+    reviews = {
+        "hotParagraphReviews": [
+            {"paragraphId": 11, "matchedParagraphIndex": 0, "matchedParagraphCount": 1,
+             "matchedText": "第一段", "commentCount": 7},
+            {"paragraphId": 25, "matchedParagraphIndex": 1, "matchedParagraphCount": 2,
+             "matchedText": "第二段\n\n第三段", "commentCount": 3},
+            {"paragraphId": 99, "matchedParagraphIndex": 8,
+             "matchedText": "未匹配", "commentCount": 9},
+        ],
+        "chapterEndHot": [
+            {"id": "first", "userName": "甲", "content": "<b>第一条</b>评论"},
+            {"id": "second", "userName": "乙", "content": "第二条评论"},
+        ],
+        "chapterEnd": [
+            {"id": "second", "userName": "乙", "content": "第二条评论"},
+            {"id": "third", "userName": "丙", "content": "第三条评论"},
+        ],
+        "summary": {"chapterEndCount": 4},
+    }
+    body = "# 标题\n<p><b>第一段</b></p><p>第二段</p><p>第三段</p>"
+    result = decorate_legado_max_content(body, reviews, view_url=view_url)
+    assert "<b>第一段</b><img" in result
+    assert "<p>第二段</p><p>第三段<img" in result
+    assert "paragraphId=11" in result
+    assert "paragraphId=25" in result
+    assert "paragraphId=99" not in result
+    assert "本章说 <img" not in result
+    assert "data:image/svg+xml;base64," in result
+    img_pattern = re.compile(r'<img[^>]*src="([^"]*(?:"[^>]+\})?)"[^>]*>')
+    sources = img_pattern.findall(result)
+    assert len(sources) == 3
+    for src in sources[:2]:
+        bubble_url, options = src.split(",{", 1)
+        assert bubble_url.startswith("bubble://paragraph?num=")
+        assert json.loads("{" + options)["style"] == "TEXT"
+        assert "java.showBrowser" in json.loads("{" + options)["click"]
+    card_url, card_options = sources[2].split(",{", 1)
+    assert json.loads("{" + card_options)["style"] == "FULL"
+    assert "?tab=chapter" in json.loads("{" + card_options)["click"]
+    svg = base64.b64decode(card_url.removeprefix("data:image/svg+xml;base64,"))
+    texts = [element.text for element in ElementTree.fromstring(svg).iter() if element.tag.endswith("text")]
+    assert "本章说" in texts
+    assert "4 条评论  >" in texts
+    assert any("甲：第一条 评论" in text for text in texts)
+    assert any("乙：第二条评论" in text for text in texts)
+    assert any("丙：第三条评论" in text for text in texts)
+    assert decorate_legado_max_content(body, {"hotParagraphReviews": []}, view_url=view_url) == body
 
 
 def test_subscribe_candidate_response_does_not_expose_private_primary_urls(client, monkeypatch):
