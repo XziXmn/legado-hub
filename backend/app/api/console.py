@@ -3707,6 +3707,20 @@ def reset_user_access_code(request: Request, user_id: str, payload: dict | None 
     return result
 
 
+@console_route("get", "/users/{user_id}/links")
+def get_user_access_links(request: Request, user_id: str):
+    """Re-show a reading user's current source/subscription links."""
+    admin = auth_service.require_admin(request)
+    code = auth_service.access_code_for_user(
+        user_id,
+        actor_user_id=admin.user_id,
+        actor_role=admin.role,
+    )
+    result: dict = {"userId": user_id, "accessCode": code}
+    result.update(_subscription_links_for_access_code(code, request))
+    return result
+
+
 @console_route("post", "/users/{user_id}/revoke-sessions")
 def revoke_user_sessions(request: Request, user_id: str, payload: dict | None = None):
     admin = auth_service.require_admin(request)

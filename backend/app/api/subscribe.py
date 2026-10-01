@@ -1090,11 +1090,14 @@ async def get_subscribed_chapter(request: Request, chapter_id: str):
 
 @router.get("/legado/source")
 @public_router.get("/legado/source")
-def get_legado_source(request: Request, code: str = "") -> list[dict]:
+def get_legado_source(request: Request, code: str = "", reader: str = "x") -> list[dict]:
     """Personal book-source JSON bound to a user access code.
 
     Requires ``?code=`` (no anonymous/public source export). Invalid codes
-    return 401 (same family as redeem).
+    return 401 (same family as redeem). ``reader=max`` serves the Legado Max
+    flavour (review bubbles instead of the chapterComment rule); the default
+    is the Legado-X protocol source. One link always yields exactly one
+    source entry.
     """
     from app.core.public_security import reading_base_url, request_client_ip
     from app.services.user_auth import AuthRateLimitError, auth_rate_limiter
@@ -1124,9 +1127,12 @@ def get_legado_source(request: Request, code: str = "") -> list[dict]:
 
     # Always bake the reader entrypoint (8765), never admin (8766) — access/enter
     # and Reading APIs only exist on the public listener.
+    if reader not in ("x", "max"):
+        raise HTTPException(status_code=422, detail="reader 无效")
     return generate_legado_source(
         reading_base_url(request),
         access_code=access_code,
+        reader=reader,
     )
 
 

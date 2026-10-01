@@ -1183,7 +1183,8 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
         conn.commit()
 
     source = generate_legado_source("http://testserver")[0]
-    max_source = generate_legado_source("http://testserver")[1]
+    max_source = generate_legado_source("http://testserver", reader="max")[0]
+    assert len(generate_legado_source("http://testserver")) == 1
     assert max_source["bookSourceUrl"] == "LegadoHub-LAN-Max"
     assert "·Max" in max_source["bookSourceName"]
     assert "Legado-Max" in max_source["bookSourceGroup"]

@@ -311,21 +311,28 @@ class UserAuthService:
             subscription = f"{base}/api/auth/access/enter?code={q}&next={next_q}"
             return source, subscription
 
+        def _max_source(base: str) -> str:
+            return f"{base}/api/subscribe/legado/source?code={q}&reader=max"
+
         if public:
             source, subscription = _pair(public)
             links["publicSourceUrl"] = source
             links["publicSubscriptionUrl"] = subscription
+            links["publicMaxSourceUrl"] = _max_source(public)
         if lan and lan != public:
             source, subscription = _pair(lan)
             links["lanSourceUrl"] = source
             links["lanSubscriptionUrl"] = subscription
+            links["lanMaxSourceUrl"] = _max_source(lan)
         # Preferred single-copy targets for the admin UI.
         if public:
             links["sourceUrl"] = links["publicSourceUrl"]
             links["subscriptionUrl"] = links["publicSubscriptionUrl"]
+            links["maxSourceUrl"] = links["publicMaxSourceUrl"]
         elif lan:
             links["sourceUrl"] = links["lanSourceUrl"]
             links["subscriptionUrl"] = links["lanSubscriptionUrl"]
+            links["maxSourceUrl"] = links["lanMaxSourceUrl"]
         return links
 
     def create_access_user(
@@ -343,6 +350,7 @@ class UserAuthService:
             actor_user_id=actor_user_id,
             actor_role=actor_role,
         )
+        self._store_access_code_secret(result["userId"], secret)
         if actor_user_id:
             with self._conn() as conn:
                 audit_service.record(
@@ -415,10 +423,68 @@ class UserAuthService:
             actor_role=actor_role,
             audit_action="user.access_code.reset",
         )
+        self._store_access_code_secret(user_id, secret)
         return {
             "userId": user_id,
             "accessCode": self.build_access_code(user.username, secret),
         }
+
+    def _store_access_code_secret(self, user_id: str, secret: str) -> None:
+        """Persist the reading-code secret so the admin can re-show the links.
+
+        The login hash stays one-way; this column only mirrors the reading
+        access code, which stays revocable at any time via reset.
+        """
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE users SET access_code_secret = ?, updated_at = ? WHERE user_id = ?",
+                (str(secret or ""), self._now(), user_id),
+            )
+            conn.commit()
+
+    def access_code_for_user(
+        self,
+        user_id: str,
+        *,
+        actor_user_id: str = "",
+        actor_role: str = "",
+    ) -> str:
+        """Return the user's current access code for link re-display.
+
+        Codes issued before the secret was persisted cannot be recovered; the
+        admin must regenerate (invalidating the old link) in that case.
+        """
+        user = self.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if user.is_admin:
+            raise HTTPException(status_code=400, detail="管理员账号没有书源链接")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT username, access_code_secret FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        secret = str(row[1] or "").strip()
+        if not secret:
+            raise HTTPException(
+                status_code=409,
+                detail="该用户的授权码创建于旧版本、未存储明文，无法直接查看；请重新生成后使用新链接",
+            )
+        if actor_user_id:
+            with self._conn() as conn:
+                audit_service.record(
+                    action="user.access_code.reveal",
+                    actor_user_id=actor_user_id,
+                    actor_role=actor_role,
+                    target_type="user",
+                    target_id=user_id,
+                    conn=conn,
+                )
+                conn.commit()
+        return self.build_access_code(str(row[0]), secret)
 
     def bootstrap_admin(self, username: str, password: str | None = None) -> dict[str, Any]:
         with self._bootstrap_lock:

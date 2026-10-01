@@ -12,6 +12,7 @@ import {
   UserCheck,
   Users,
   UserX,
+  Link2,
 } from "lucide-react"
 import { api, apiErrorMessage, type ManagedUser } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -34,6 +35,11 @@ interface IssuedAccessCode {
   publicSubscriptionUrl?: string
   lanSourceUrl?: string
   lanSubscriptionUrl?: string
+  maxSourceUrl?: string
+  publicMaxSourceUrl?: string
+  lanMaxSourceUrl?: string
+  /** "reveal" = re-opened from the user list; copy stays available anytime. */
+  mode?: "issue" | "reveal"
 }
 
 function formatDate(value?: string) {
@@ -54,7 +60,14 @@ function issuedSourceLinks(issued: IssuedAccessCode) {
     ""
   const lan = issued.lanSourceUrl || ""
   const showLan = !!lan && lan !== primary && lan !== (issued.publicSourceUrl || "")
-  return { primary, lan: showLan ? lan : "" }
+  const maxPrimary =
+    issued.maxSourceUrl ||
+    issued.publicMaxSourceUrl ||
+    issued.lanMaxSourceUrl ||
+    ""
+  const maxLan = issued.lanMaxSourceUrl || ""
+  const showMaxLan = !!maxLan && maxLan !== maxPrimary && maxLan !== (issued.publicMaxSourceUrl || "")
+  return { primary, lan: showLan ? lan : "", maxPrimary, maxLan: showMaxLan ? maxLan : "" }
 }
 
 function CopyIconButton({
@@ -154,6 +167,35 @@ export function UsersPage() {
     setCopyError("")
   }
 
+  const [linksLoadingFor, setLinksLoadingFor] = useState("")
+  const [linksError, setLinksError] = useState("")
+
+  const openUserLinks = async (item: ManagedUser) => {
+    setLinksError("")
+    setLinksLoadingFor(item.userId)
+    try {
+      const result = await api.users.accessLinks(item.userId)
+      setIssuedAccessCode({
+        username: item.username,
+        accessCode: result.accessCode,
+        sourceUrl: result.sourceUrl,
+        subscriptionUrl: result.subscriptionUrl,
+        publicSourceUrl: result.publicSourceUrl,
+        publicSubscriptionUrl: result.publicSubscriptionUrl,
+        lanSourceUrl: result.lanSourceUrl,
+        lanSubscriptionUrl: result.lanSubscriptionUrl,
+        maxSourceUrl: result.maxSourceUrl,
+        publicMaxSourceUrl: result.publicMaxSourceUrl,
+        lanMaxSourceUrl: result.lanMaxSourceUrl,
+        mode: "reveal",
+      })
+    } catch (error) {
+      setLinksError(apiErrorMessage(error, "书源链接获取失败。"))
+    } finally {
+      setLinksLoadingFor("")
+    }
+  }
+
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault()
     setCreateError("")
@@ -173,6 +215,10 @@ export function UsersPage() {
           publicSubscriptionUrl: result.publicSubscriptionUrl,
           lanSourceUrl: result.lanSourceUrl,
           lanSubscriptionUrl: result.lanSubscriptionUrl,
+          maxSourceUrl: result.maxSourceUrl,
+          publicMaxSourceUrl: result.publicMaxSourceUrl,
+          lanMaxSourceUrl: result.lanMaxSourceUrl,
+          mode: "issue",
         })
       }
       closeCreateDialog()
@@ -202,6 +248,10 @@ export function UsersPage() {
           publicSubscriptionUrl: result.publicSubscriptionUrl,
           lanSourceUrl: result.lanSourceUrl,
           lanSubscriptionUrl: result.lanSubscriptionUrl,
+          maxSourceUrl: result.maxSourceUrl,
+          publicMaxSourceUrl: result.publicMaxSourceUrl,
+          lanMaxSourceUrl: result.lanMaxSourceUrl,
+          mode: "issue",
         })
       } else {
         await api.users.resetPassword(resetTarget.userId, resetPassword)
@@ -267,6 +317,11 @@ export function UsersPage() {
       )}
       {actionNotice && <Alert><AlertDescription>{actionNotice}</AlertDescription></Alert>}
 
+      {linksError && (
+        <Alert variant="destructive" className="mb-3">
+          <AlertDescription>{linksError}</AlertDescription>
+        </Alert>
+      )}
       <Card className="border-slate-200 shadow-sm">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -297,6 +352,16 @@ export function UsersPage() {
                       <TableCell className="whitespace-nowrap text-slate-500">{formatDate(item.updatedAt)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
+                          {item.role === "user" && (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              aria-label={`查看 ${item.username} 的书源链接`}
+                              title="查看书源链接"
+                              disabled={linksLoadingFor === item.userId || deletePending}
+                              onClick={() => { void openUserLinks(item) }}
+                            >{linksLoadingFor === item.userId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}</Button>
+                          )}
                           {!isCurrentUser && <Button variant="outline" size="icon" aria-label={resetLabel} title={resetLabel} disabled={deletePending} onClick={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}><KeyRound className="h-4 w-4" /></Button>}
                           <Button
                             variant="outline" size="icon" aria-label={`撤销 ${item.username} 的登录会话`} title={isCurrentUser ? "当前会话请使用退出登录" : "撤销全部登录会话"}
@@ -380,11 +445,11 @@ export function UsersPage() {
           <DialogHeader>
             <DialogTitle>发给用户</DialogTitle>
             <DialogDescription>
-              {issuedAccessCode?.username || "用户"} · 只显示一次，复制书源链接即可在 Reading 导入
+              {issuedAccessCode?.username || "用户"} · {issuedAccessCode?.mode === "reveal" ? "当前生效的书源链接，可随时回到本页查看" : "复制书源链接即可在 Reading 导入，之后可在用户列表随时查看"}
             </DialogDescription>
           </DialogHeader>
           {issuedAccessCode && (() => {
-            const { primary, lan } = issuedSourceLinks(issuedAccessCode)
+            const { primary, lan, maxPrimary, maxLan } = issuedSourceLinks(issuedAccessCode)
             return (
               <div className="space-y-4">
                 {primary ? (
@@ -419,6 +484,36 @@ export function UsersPage() {
                     </AlertDescription>
                   </Alert>
                 )}
+
+                {maxPrimary ? (
+                  <div className="space-y-2 border-t border-slate-100 pt-3">
+                    <div className="text-sm font-medium text-slate-800">
+                      Legado Max 书源链接
+                      <span className="ml-2 text-xs font-normal text-slate-500">正文内嵌段评气泡与本章说卡片</span>
+                    </div>
+                    <div className="flex min-w-0 items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <code className="min-w-0 flex-1 select-all break-all text-xs leading-relaxed text-slate-800">{maxPrimary}</code>
+                      <CopyIconButton
+                        copied={copiedKey === "maxSource"}
+                        label="复制 Legado Max 书源链接"
+                        onCopy={() => copyText("maxSource", maxPrimary)}
+                      />
+                    </div>
+                    {maxLan ? (
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">内网（可选）</div>
+                        <div className="flex min-w-0 items-start gap-2 rounded-md border border-slate-100 bg-white p-2">
+                          <code className="min-w-0 flex-1 select-all break-all text-[11px] text-slate-600">{maxLan}</code>
+                          <CopyIconButton
+                            copied={copiedKey === "maxLanSource"}
+                            label="复制内网 Legado Max 书源"
+                            onCopy={() => copyText("maxLanSource", maxLan)}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="space-y-2 border-t border-slate-100 pt-3">
                   <div className="text-xs text-slate-500">授权码（备用）</div>

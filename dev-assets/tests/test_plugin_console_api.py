@@ -227,6 +227,9 @@ def test_user_management_validates_payload_and_invalidates_reset_sessions(admin_
     if reset_body.get("sourceUrl"):
         assert replacement_access_code in reset_body["sourceUrl"]
         assert initial_access_code not in reset_body["sourceUrl"]
+        # Max flavour link shares the same code via the reader parameter.
+        assert "reader=max" in reset_body["maxSourceUrl"]
+        assert replacement_access_code in reset_body["maxSourceUrl"]
     assert reader_client.get("/api/auth/me").json()["authenticated"] is False
     assert reader_client.post(
         "/api/auth/access/redeem",
@@ -2089,3 +2092,56 @@ async def test_manual_library_book_update_check_queues_without_waiting(monkeypat
     assert ("done", "book-1") not in events
     release.set()
     await asyncio.sleep(0)
+
+
+def test_user_access_links_reveal_current_code(admin_client):
+    """The links endpoint re-issues the stored code with fresh link set."""
+    username = f"reader-{uuid.uuid4().hex[:8]}"
+    created = admin_client.post(
+        "/api/console/users",
+        json={"username": username, "role": "user"},
+    ).json()
+
+    response = admin_client.get(f"/api/console/users/{created['userId']}/links")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accessCode"] == created["accessCode"]
+    if payload.get("sourceUrl"):
+        assert payload["accessCode"] in payload["sourceUrl"]
+        assert "reader=max" in payload["maxSourceUrl"]
+        assert payload["accessCode"] in payload["maxSourceUrl"]
+
+    admins = [
+        item
+        for item in admin_client.get("/api/console/users").json()["items"]
+        if item["role"] == "admin"
+    ]
+    assert admin_client.get(f"/api/console/users/{admins[0]['userId']}/links").status_code == 400
+
+
+def test_user_access_links_reports_unstored_legacy_code(admin_client):
+    """Codes issued before plaintext storage cannot be re-shown; reset works."""
+    username = f"reader-{uuid.uuid4().hex[:8]}"
+    created = admin_client.post(
+        "/api/console/users",
+        json={"username": username, "role": "user"},
+    ).json()
+    from app import config
+
+    with sqlite3.connect(config.DB_PATH) as conn:
+        conn.execute(
+            "UPDATE users SET access_code_secret = '' WHERE user_id = ?",
+            (created["userId"],),
+        )
+        conn.commit()
+
+    response = admin_client.get(f"/api/console/users/{created['userId']}/links")
+    assert response.status_code == 409
+    assert "重新生成" in response.json()["detail"]
+
+    reset_response = admin_client.post(
+        f"/api/console/users/{created['userId']}/reset-access-code",
+        json={},
+    )
+    assert reset_response.status_code == 200
+    assert admin_client.get(f"/api/console/users/{created['userId']}/links").status_code == 200

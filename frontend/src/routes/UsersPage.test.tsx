@@ -17,6 +17,7 @@ vi.mock("@/lib/api", () => ({
       create: vi.fn(),
       resetPassword: vi.fn(),
       resetAccessCode: vi.fn(),
+      accessLinks: vi.fn(),
       revokeSessions: vi.fn(),
       setDisabled: vi.fn(),
       deleteUser: vi.fn(),
@@ -52,6 +53,12 @@ describe("UsersPage", () => {
     })
     ;(api.users.resetPassword as any).mockResolvedValue({ userId: "admin-1", passwordReset: true })
     ;(api.users.resetAccessCode as any).mockResolvedValue({ userId: "user-1", accessCode: "LH1.reader.replacement" })
+    ;(api.users.accessLinks as any).mockResolvedValue({
+      userId: "user-1",
+      accessCode: "LH1.reader.stored-code",
+      sourceUrl: "https://books.example.test/api/subscribe/legado/source?code=LH1.reader.stored-code",
+      maxSourceUrl: "https://books.example.test/api/subscribe/legado/source?code=LH1.reader.stored-code&reader=max",
+    })
     ;(api.users.revokeSessions as any).mockResolvedValue({ userId: "user-1", revokedSessions: 2 })
     ;(api.users.setDisabled as any).mockResolvedValue({ userId: "user-1", disabled: true })
     ;(api.users.deleteUser as any).mockResolvedValue({ userId: "user-1", deleted: true })
@@ -130,6 +137,55 @@ describe("UsersPage", () => {
     await user.click(within(readerRow!).getByRole("button", { name: "删除 reader" }))
     await waitFor(() => expect(api.users.deleteUser).toHaveBeenCalledWith("user-1"))
     expect(await screen.findByText("已删除普通用户 reader。")).toBeInTheDocument()
+  })
+
+  it("shows the Legado Max link next to the regular source link", async () => {
+    const user = userEvent.setup()
+    ;(api.users.create as any).mockResolvedValue({
+      userId: "user-2",
+      username: "new-reader",
+      role: "user",
+      disabled: false,
+      accessCode: "LH1.new-reader.secret",
+      sourceUrl: "https://books.example.test/api/subscribe/legado/source?code=LH1.new-reader.secret",
+      maxSourceUrl: "https://books.example.test/api/subscribe/legado/source?code=LH1.new-reader.secret&reader=max",
+    })
+    renderPage()
+    await screen.findByText("reader")
+
+    await user.click(screen.getByRole("button", { name: "新建用户" }))
+    await user.type(screen.getByLabelText("用户名"), "new-reader")
+    await user.click(screen.getByRole("button", { name: "创建" }))
+
+    expect(await screen.findByText("Legado Max 书源链接")).toBeInTheDocument()
+    expect(screen.getByText("https://books.example.test/api/subscribe/legado/source?code=LH1.new-reader.secret&reader=max")).toBeInTheDocument()
+    expect(screen.getByText("https://books.example.test/api/subscribe/legado/source?code=LH1.new-reader.secret")).toBeInTheDocument()
+  })
+
+  it("re-opens the links dialog from the user row via the stored code", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("reader")
+
+    const readerRow = screen.getByText("reader").closest("tr")
+    await user.click(within(readerRow!).getByRole("button", { name: "查看 reader 的书源链接" }))
+
+    await waitFor(() => expect(api.users.accessLinks).toHaveBeenCalledWith("user-1"))
+    expect(await screen.findByText("LH1.reader.stored-code")).toBeInTheDocument()
+    expect(screen.getByText(/当前生效的书源链接/)).toBeInTheDocument()
+    expect(screen.getByText(/Legado Max 书源链接/)).toBeInTheDocument()
+  })
+
+  it("surfaces an error when stored links are unavailable", async () => {
+    const user = userEvent.setup()
+    ;(api.users.accessLinks as any).mockRejectedValue(new Error("该用户的授权码创建于旧版本、未存储明文，无法直接查看；请重新生成后使用新链接"))
+    renderPage()
+    await screen.findByText("reader")
+
+    const readerRow = screen.getByText("reader").closest("tr")
+    await user.click(within(readerRow!).getByRole("button", { name: "查看 reader 的书源链接" }))
+
+    expect(await screen.findByText(/该用户的授权码创建于旧版本/)).toBeInTheDocument()
   })
 
   it("keeps the user when deletion confirmation is cancelled", async () => {

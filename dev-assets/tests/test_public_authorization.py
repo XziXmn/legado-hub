@@ -519,13 +519,32 @@ def test_personal_legado_source_embeds_bound_access_code() -> None:
     )
     assert response.status_code == 200
     sources = response.json()
-    assert len(sources) == 2
-    assert [source["bookSourceUrl"] for source in sources] == ["LegadoHub-LAN", "LegadoHub-LAN-Max"]
+    assert len(sources) == 1
+    assert sources[0]["bookSourceUrl"] == "LegadoHub-LAN"
     source = sources[0]
     code_literal = json.dumps(created["accessCode"], ensure_ascii=False)
-    for source in sources:
-        assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["loginUrl"]
-        assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["jsLib"]
+    assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["loginUrl"]
+    assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in source["jsLib"]
+
+    max_response = client.get(
+        "/api/subscribe/legado/source",
+        params={"code": created["accessCode"], "reader": "max"},
+    )
+    assert max_response.status_code == 200
+    max_sources = max_response.json()
+    assert len(max_sources) == 1
+    assert max_sources[0]["bookSourceUrl"] == "LegadoHub-LAN-Max"
+    assert f"var LEGADOHUB_ACCESS_CODE = {code_literal}" in max_sources[0]["jsLib"]
+    assert "reviewBubbles=1" in max_sources[0]["ruleContent"]["content"]
+    assert "chapterComment" not in max_sources[0]["ruleContent"]
+    assert client.get(
+        "/api/subscribe/legado/source",
+        params={"code": created["accessCode"], "reader": "wrong"},
+    ).status_code == 422
+
+    # The issued code is retrievable for link re-display (service level; the
+    # admin HTTP flow is covered in test_plugin_console_api).
+    assert auth_service.access_code_for_user(created["userId"]) == created["accessCode"]
     assert "legadoHubOpenSubscriptions" in source["loginUi"]
     assert "legadoHubOpenLibrary" in source["loginUi"]
     assert "专属" in source["bookSourceComment"] or "自动鉴权" in source["bookSourceComment"]

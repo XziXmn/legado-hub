@@ -478,6 +478,11 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}")
 
 
+def _ensure_users_schema(conn: sqlite3.Connection) -> None:
+    """users columns added after the initial schema shipped."""
+    _ensure_column(conn, "users", "access_code_secret", "TEXT DEFAULT ''")
+
+
 def _ensure_shared_library_schema(conn: sqlite3.Connection) -> None:
     if "aggregate_book_tasks" in {
         row[0]
@@ -674,6 +679,7 @@ def initialize_database(db_path: Path | None = None) -> str:
                 f"database schema {current_version} is newer than supported {SCHEMA_VERSION}"
             )
         conn.executescript(f"BEGIN IMMEDIATE;\n{SCHEMA_SQL}")
+        _ensure_users_schema(conn)
         _ensure_shared_library_schema(conn)
         _migrate_book_search_cache(conn)
         if current_version < 12:

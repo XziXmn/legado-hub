@@ -878,11 +878,18 @@ def generate_legado_source(
     base_api: str | None = None,
     *,
     access_code: str | None = None,
+    reader: str = "x",
 ) -> list[dict]:
-    return [
-        _build_source(base_api, access_code=access_code),
-        _build_source(base_api, access_code=access_code, reader="max"),
-    ]
+    """Generate the book-source JSON for one reader flavour.
+
+    ``reader="x"`` is the Legado-X protocol source; ``reader="max"`` swaps the
+    chapterComment rule for in-content review bubbles consumed by Legado Max.
+    Each import link returns exactly one source so the reader choice stays on
+    the issuer side (admin dialog), not on the reader's source list.
+    """
+    if reader not in ("x", "max"):
+        raise ValueError(f"unsupported reader flavour: {reader}")
+    return [_build_source(base_api, access_code=access_code, reader=reader)]
 
 
 def write_legado_source() -> str:

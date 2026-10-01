@@ -29,6 +29,9 @@ export interface SubscriptionAccessLinks {
   publicSubscriptionUrl?: string
   lanSourceUrl?: string
   lanSubscriptionUrl?: string
+  maxSourceUrl?: string
+  publicMaxSourceUrl?: string
+  lanMaxSourceUrl?: string
 }
 
 export interface ManagedUserCreated extends ManagedUser, SubscriptionAccessLinks {}
@@ -361,6 +364,8 @@ export const api = {
         method: "POST",
         body: JSON.stringify({}),
       }),
+    accessLinks: (userId: string): Promise<AccessCodeIssue> =>
+      fetchJson(`/users/${userId}/links`),
     revokeSessions: (userId: string): Promise<{ userId: string; revokedSessions: number }> =>
       fetchJson(`/users/${userId}/revoke-sessions`, {
         method: "POST",
