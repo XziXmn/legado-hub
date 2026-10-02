@@ -28,8 +28,8 @@ from app.core.public_security import (
 # - FORMAL app release (git tag vX.Y.Z): bump BOTH — version (shown in name /
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.32"
-# Last beta marker: Legado Max review bubbles (ms). Bump this alone for tests.
-_READER_RULE_RELEASED_AT_MS = 1790769266618
+# Last beta marker: chapter fetch errors must not become cached hex URLs (ms).
+_READER_RULE_RELEASED_AT_MS = 1790951148912
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -812,30 +812,29 @@ def _build_source(
         },
         "ruleContent": {
             # Must use legadoHubAjax (jsLib) so chapter fetch carries the same
-            # Bearer as search/toc. Plain java.ajax(contentUrl) skipped source header.
+            # Bearer as search/toc. Failures must propagate instead of caching
+            # the data URL's hex payload as chapter text.
             "content": '@js:\n'
             'var payload = String(result || "");\n'
-            'var contentUrl = "";\n'
-            'try {\n'
-            '  contentUrl = String(java.hexDecodeToString(payload) || "").trim();\n'
-            '  try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e0) {}\n'
+            'var contentUrl;\n'
+            'try { contentUrl = String(java.hexDecodeToString(payload) || "").trim(); }\n'
+            'catch (e) { throw new Error("章节地址解码失败: " + e); }\n'
+            'if (!/^https?:\\/\\//i.test(contentUrl)) throw new Error("章节地址无效");\n'
+            'contentUrl = legadoHubRewriteApiUrl(contentUrl);\n'
             + review_bubble_query
-            + '  if (/^https?:\\/\\//i.test(contentUrl)) {\n'
-            '    try {\n'
-            '      payload = String(legadoHubAjax(contentUrl) || "");\n'
-            '    } catch (eAjax) {\n'
-            '      payload = String(java.ajax(contentUrl) || "");\n'
-            '    }\n'
-            '  }\n'
-            '} catch (e) {}\n'
-            'var text = payload;\n'
-            'var chapterPayload = null;\n'
-            'try {\n'
-            '  chapterPayload = JSON.parse(payload);\n'
-            '  if (typeof chapterPayload.content === "string") text = chapterPayload.content;\n'
-            '  else if (typeof chapterPayload.detail === "string") text = chapterPayload.detail;\n'
-            '  else if (chapterPayload.detail && chapterPayload.detail.message) text = chapterPayload.detail.message;\n'
-            '} catch (e) {}\n'
+            + 'try { payload = String(legadoHubAjax(contentUrl) || ""); }\n'
+            'catch (e) { throw new Error("章节请求失败: " + e); }\n'
+            'if (!payload) throw new Error("章节接口返回空响应");\n'
+            'var chapterPayload;\n'
+            'try { chapterPayload = JSON.parse(payload); }\n'
+            'catch (e) { throw new Error("章节接口返回无效 JSON: " + e); }\n'
+            'if (!chapterPayload || typeof chapterPayload.content !== "string") {\n'
+            '  var detail = chapterPayload && chapterPayload.detail;\n'
+            '  if (detail && typeof detail === "object") detail = detail.message;\n'
+            '  throw new Error("章节接口未返回正文" + (detail ? ": " + detail : ""));\n'
+            '}\n'
+            'var text = chapterPayload.content;\n'
+            'if (!text.trim()) throw new Error("章节正文为空");\n'
             'text = String(text || "").replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");\n'
             'result = /<(?:p|div)\\b/i.test(text) ? text : text.replace(/\\n\\n+/g, "<br><br>").replace(/\\n/g, "<br>");',
             "title": "$.title",

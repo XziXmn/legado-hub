@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1220,7 +1222,8 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert "type: 'legadoHub'" in source["ruleToc"]["chapterUrl"]
     assert "qingci" not in source["ruleToc"]["chapterUrl"].lower()
     assert "java.hexDecodeToString(payload)" in source["ruleContent"]["content"]
-    assert "java.ajax(contentUrl)" in source["ruleContent"]["content"]
+    assert "legadoHubAjax(contentUrl)" in source["ruleContent"]["content"]
+    assert "java.ajax(contentUrl)" not in source["ruleContent"]["content"]
     assert 'legadoHubReviewRoot(contentUrl) + "/reviews"' not in source["ruleContent"]["content"]
     assert "hasReaderCapability" not in source["ruleContent"]["content"]
     assert "legadoHubDecorateChapterReviewOnly" not in source["jsLib"]
@@ -1411,6 +1414,68 @@ def test_shared_chapter_strips_only_matching_leading_source_title():
     assert strip_leading_duplicate_chapter_title("第234章 看不见的手\n\n正文", "第234章 看不见的手") == "正文"
     assert strip_leading_duplicate_chapter_title(body, "第234章 另一只手") == body
     assert strip_leading_duplicate_chapter_title("正文\n\n第477章 看不见的手", "第234章 看不见的手") == "正文\n\n第477章 看不见的手"
+
+
+def test_generated_chapter_rule_never_returns_encoded_url_on_failure():
+    from app.core.legado_source import generate_legado_source
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to execute generated reader rules")
+
+    harness = r"""
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const calls = [];
+const java = { hexDecodeToString: value => Buffer.from(value, 'hex').toString('utf8') };
+function legadoHubRewriteApiUrl(value) { return value; }
+function legadoHubAjax(value) {
+  calls.push(value);
+  if (input.error) throw new Error(input.error);
+  return input.response;
+}
+let result = Buffer.from(input.url).toString('hex');
+try {
+  eval(input.rule.slice(4));
+  process.stdout.write(JSON.stringify({ ok: true, result, calls }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ ok: false, error: String(error), calls }));
+}
+"""
+    url = "https://books.example.test/api/legado/chapter/encoded-id"
+    sources = (
+        generate_legado_source("https://books.example.test")[0],
+        generate_legado_source("https://books.example.test", reader="max")[0],
+    )
+    for reader, source in enumerate(sources):
+        rule = source["ruleContent"]["content"]
+
+        def run_rule(*, response: str = "", error: str = "") -> dict:
+            completed = subprocess.run(
+                [node, "-e", harness],
+                input=json.dumps({"rule": rule, "url": url, "response": response, "error": error}),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            )
+            return json.loads(completed.stdout)
+
+        success = run_rule(response=json.dumps({"content": "第一段\n\n第二段"}))
+        assert success["ok"] is True
+        assert success["result"] == "第一段<br><br>第二段"
+        assert success["calls"] == [url + ("?reviewBubbles=1" if reader else "")]
+
+        for response, error, expected in (
+            ("", "temporary timeout", "章节请求失败"),
+            ("not-json", "", "章节接口返回无效 JSON"),
+            (json.dumps({"detail": "Unauthorized"}), "", "章节接口未返回正文: Unauthorized"),
+            (json.dumps({"content": ""}), "", "章节正文为空"),
+        ):
+            failed = run_rule(response=response, error=error)
+            assert failed["ok"] is False
+            assert expected in failed["error"]
+            assert "68747470" not in failed["error"]
 
 
 def test_legado_max_bubbles_preserve_paragraphs_and_click_targets():
