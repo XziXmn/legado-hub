@@ -121,8 +121,8 @@ describe("UsersPage", () => {
     expect(within(adminRow!).queryByRole("button", { name: "重置 admin 的密码" })).not.toBeInTheDocument()
     expect(within(adminRow!).queryByRole("button", { name: "删除 admin" })).not.toBeInTheDocument()
 
-    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作菜单" }))
-    await user.click(await screen.findByText("重新生成授权码"))
+    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作" }))
+    await user.click(await screen.findByRole("button", { name: "重新生成授权码" }))
     await user.click(screen.getByRole("button", { name: "生成新链接" }))
     await waitFor(() => expect(api.users.resetAccessCode).toHaveBeenCalledWith("user-1"))
     expect(await screen.findByText("LH1.reader.replacement")).toBeInTheDocument()
@@ -169,8 +169,8 @@ describe("UsersPage", () => {
     await screen.findByText("reader")
 
     const readerRow = screen.getByText("reader").closest("tr")
-    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作菜单" }))
-    await user.click(await screen.findByText("查看书源链接"))
+    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作" }))
+    await user.click(await screen.findByRole("button", { name: "查看书源链接" }))
 
     await waitFor(() => expect(api.users.accessLinks).toHaveBeenCalledWith("user-1"))
     expect(await screen.findByText("LH1.reader.stored-code")).toBeInTheDocument()
@@ -185,8 +185,8 @@ describe("UsersPage", () => {
     await screen.findByText("reader")
 
     const readerRow = screen.getByText("reader").closest("tr")
-    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作菜单" }))
-    await user.click(await screen.findByText("查看书源链接"))
+    await user.click(within(readerRow!).getByRole("button", { name: "打开 reader 的书源链接操作" }))
+    await user.click(await screen.findByRole("button", { name: "查看书源链接" }))
 
     expect(await screen.findByText(/该用户的授权码创建于旧版本/)).toBeInTheDocument()
   })

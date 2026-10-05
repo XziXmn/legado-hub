@@ -22,7 +22,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -170,6 +169,7 @@ export function UsersPage() {
 
   const [linksLoadingFor, setLinksLoadingFor] = useState("")
   const [linksError, setLinksError] = useState("")
+  const [linksActionTarget, setLinksActionTarget] = useState<ManagedUser | null>(null)
 
   const openUserLinks = async (item: ManagedUser) => {
     setLinksError("")
@@ -354,25 +354,14 @@ export function UsersPage() {
                       <TableCell>
                         <div className="flex justify-end gap-1">
                           {item.role === "user" ? (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  aria-label={`打开 ${item.username} 的书源链接操作菜单`}
-                                  title="查看 / 重新生成书源链接"
-                                  disabled={linksLoadingFor === item.userId || deletePending}
-                                >{linksLoadingFor === item.userId ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}</Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onSelect={() => { void openUserLinks(item) }}>
-                                  <Link2 className="mr-2 h-4 w-4" />查看书源链接
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onSelect={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}>
-                                  <KeyRound className="mr-2 h-4 w-4" />重新生成授权码
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              aria-label={`打开 ${item.username} 的书源链接操作`}
+                              title="查看 / 重新生成书源链接"
+                              disabled={linksLoadingFor === item.userId || deletePending}
+                              onClick={() => setLinksActionTarget(item)}
+                            ><KeyRound className="h-4 w-4" /></Button>
                           ) : (
                             !isCurrentUser && <Button variant="outline" size="icon" aria-label={resetLabel} title={resetLabel} disabled={deletePending} onClick={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}><KeyRound className="h-4 w-4" /></Button>
                           )}
@@ -450,6 +439,30 @@ export function UsersPage() {
             {resetError && <Alert variant="destructive"><AlertDescription>{resetError}</AlertDescription></Alert>}
             <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={closeResetDialog}>取消</Button><Button type="submit" disabled={resetting || (resetTarget?.role === "admin" && resetPassword.length < 8)}>{resetting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{resetTarget?.role === "user" ? "生成新链接" : "重置密码"}</Button></div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!linksActionTarget} onOpenChange={(open) => { if (!open) setLinksActionTarget(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>书源链接操作</DialogTitle>
+            <DialogDescription>
+              查看 {linksActionTarget?.username} 当前生效的书源链接，或重新生成授权码；重新生成后旧链接与现有登录会话立即失效。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setLinksActionTarget(null)}>取消</Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={linksLoadingFor === linksActionTarget?.userId}
+              onClick={() => { const target = linksActionTarget; setLinksActionTarget(null); if (target) void openUserLinks(target) }}
+            ><Link2 className="mr-2 h-4 w-4" />查看书源链接</Button>
+            <Button
+              type="button"
+              onClick={() => { const target = linksActionTarget; setLinksActionTarget(null); if (target) { setResetPassword(""); setResetError(""); setResetTarget(target) } }}
+            ><KeyRound className="mr-2 h-4 w-4" />重新生成授权码</Button>
+          </div>
         </DialogContent>
       </Dialog>
 
