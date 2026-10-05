@@ -443,12 +443,13 @@ class LibraryBooksService:
                     "sourceWordCount": int(row[4] or 0),
                     "previewOnly": bool(row[5]),
                     "processedAt": str(row[6] or ""),
+                    "volumeName": str(row[7] or "").strip(),
                 }
                 for row in conn.execute(
                     """
                     SELECT chapter_id, source_chapter_id, chapter_index,
                            content_length, source_word_count, preview_only,
-                           last_processed_at
+                           last_processed_at, volume_name
                     FROM aggregate_chapter_tasks
                     WHERE aggregate_book_id = ?
                     """,
@@ -466,6 +467,9 @@ class LibraryBooksService:
             file_name = str(entry.get("file", "") or "").strip()
             chapter_path = self._safe_shared_chapter_path(book_dir, file_name)
             db_chapter = db_chapters.get(chapter_index, {})
+            volume_name = str(
+                db_chapter.get("volumeName") or entry.get("volumeName") or ""
+            ).strip()
             db_chapter_id = str(db_chapter.get("chapterId", "") or "")
             source_chapter_id = str(
                 entry.get("sourceChapterId")
@@ -496,6 +500,7 @@ class LibraryBooksService:
                     "chapterIndex": chapter_index,
                     "readChapterId": read_chapter_id,
                     "title": chapter_title,
+                    "volumeName": volume_name,
                     "status": chapter_status,
                     "contentLength": int(db_chapter.get("contentLength", 0) or 0),
                     "hasContent": bool(chapter_path and chapter_path.is_file()),
@@ -1740,6 +1745,7 @@ class LibraryBooksService:
                     "chapterId": read_chapter_id,
                     "index": int(item.get("chapterIndex", 0) or 0),
                     "title": item.get("title", ""),
+                    "volumeName": item.get("volumeName", ""),
                     "chapterUrl": f"{base_api}/api/legado/chapter/{read_chapter_id}",
                     "updateTime": format_reading_update_time(item.get("processedAt", "")),
                     "isVip": bool(item.get("isVip")),
