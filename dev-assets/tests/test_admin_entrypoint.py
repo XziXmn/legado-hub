@@ -282,20 +282,24 @@ def test_uvicorn_dispatches_two_real_listening_sockets(isolated_apps) -> None:
         public_response = httpx.get(
             f"http://127.0.0.1:{public_port}/api/auth/entrypoint",
             headers={"Host": "public.test"},
+            trust_env=False,
         )
         admin_response = httpx.get(
             f"http://127.0.0.1:{admin_port}/api/auth/entrypoint",
             headers={"Host": "admin.test"},
+            trust_env=False,
         )
         assert public_response.json() == {"entrypoint": "public"}
         assert admin_response.json() == {"entrypoint": "admin"}
         public_admin_response = httpx.get(
             f"http://127.0.0.1:{public_port}/api/console/status",
             headers={"Host": "public.test"},
+            trust_env=False,
         )
         admin_openapi_response = httpx.get(
             f"http://127.0.0.1:{admin_port}/openapi.json",
             headers={"Host": "admin.test"},
+            trust_env=False,
         )
         assert public_admin_response.status_code == 404
         assert admin_openapi_response.status_code == 200

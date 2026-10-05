@@ -4,6 +4,7 @@ import pytest
 import asyncio
 import sqlite3
 import json
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from app.main import app
 from app.storage.db import initialize_database
@@ -11,6 +12,7 @@ from app.services.search_jobs import SearchJobService
 from app.source_plugins.errors import BrowserRequired
 from app.source_plugins.models import LoadedPlugin, PluginMetadata
 from app.source_plugins.scheduler import PluginScheduler
+import app.source_plugins.scheduler as scheduler_module
 from app.core.app_config import AppConfig
 import app.core.app_config as app_config_module
 
@@ -1122,3 +1124,35 @@ async def test_scheduler_enforces_declared_plugin_rate_limit():
 
     assert max_active == 2
     assert min(b - a for a, b in zip(started, started[1:])) >= 0.015
+
+
+@pytest.mark.asyncio
+async def test_scheduler_rate_limiter_rechecks_after_early_wakeup(monkeypatch):
+    now = 0.0
+    sleeps = []
+    starts = []
+
+    def monotonic():
+        return now
+
+    async def early_sleep(seconds):
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds / 2 if len(sleeps) == 1 else seconds
+
+    monkeypatch.setattr(scheduler_module, "time", SimpleNamespace(monotonic=monotonic))
+    monkeypatch.setattr(scheduler_module, "asyncio", SimpleNamespace(
+        Semaphore=asyncio.Semaphore,
+        Lock=asyncio.Lock,
+        sleep=early_sleep,
+    ))
+    limiter = scheduler_module._PluginRateLimiter(concurrency=2, min_interval_ms=20)
+
+    async def operation():
+        starts.append(now)
+
+    await limiter.run(operation)
+    await limiter.run(operation)
+
+    assert len(sleeps) == 2
+    assert starts[1] - starts[0] >= 0.02
