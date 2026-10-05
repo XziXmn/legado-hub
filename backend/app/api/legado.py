@@ -130,6 +130,34 @@ def _public_text(value: Any, *, max_length: int) -> str:
     return str(value or "").strip()[:max_length]
 
 
+def _chinese_volume_number(value: int) -> str:
+    digits = "零一二三四五六七八九"
+    units = ("", "十", "百", "千")
+    number = max(0, int(value))
+    if number == 0:
+        return digits[0]
+    if number < 10:
+        return digits[number]
+    chars: list[str] = []
+    zero_pending = False
+    text = str(number)
+    for offset, raw_digit in enumerate(text):
+        digit = int(raw_digit)
+        position = len(text) - offset - 1
+        if digit:
+            if zero_pending:
+                chars.append(digits[0])
+            chars.append(digits[digit])
+            chars.append(units[position])
+            zero_pending = False
+        elif chars:
+            zero_pending = True
+    result = "".join(chars)
+    if result.startswith("一十"):
+        result = result[1:]
+    return result
+
+
 def _public_book_response(
     data: dict,
     *,
@@ -167,6 +195,7 @@ def _public_toc_response(
 ) -> dict:
     chapters = []
     current_volume = ""
+    volume_number = 0
     for position, raw in enumerate(result.get("chapters", []) or [], start=1):
         if not isinstance(raw, dict):
             continue
@@ -198,11 +227,12 @@ def _public_toc_response(
         is_paid = bool(raw.get("isPaid", is_vip))
         if reader == "max" and volume_name:
             if volume_name != current_volume:
+                volume_number += 1
                 chapters.append(
                     {
                         "sourceId": source_id,
                         "index": chapter_index,
-                        "title": volume_name,
+                        "title": f"第{_chinese_volume_number(volume_number)}卷 {volume_name}",
                         "chapterUrl": "",
                         "isVolume": True,
                     }

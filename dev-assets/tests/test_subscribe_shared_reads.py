@@ -1172,7 +1172,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
                     index,
                     title,
                     int(index == 4),
-                    "第一卷" if index <= 2 else "第二卷",
+                    "正文卷" if index <= 2 else "死海骑士团",
                 ),
             )
         conn.execute(
@@ -1342,7 +1342,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     max_toc = client.get(f"/api/legado/book/{book_id}/toc?reader=max")
     assert max_toc.status_code == 200
     assert [item["title"] for item in max_toc.json()["chapters"]] == [
-        "第一卷", "第一章", "第二章", "第二卷", "第三章", "第四章 付费",
+        "第一卷 正文卷", "第一章", "第二章", "第二卷 死海骑士团", "第三章", "第四章 付费",
     ]
     assert [item["chapterUrl"] for item in max_toc.json()["chapters"] if item.get("isVolume")] == ["", ""]
 
@@ -2146,19 +2146,19 @@ def test_legado_max_toc_inserts_volume_headers_without_changing_x_layout():
                 "index": 1,
                 "title": "第一章",
                 "chapterUrl": "https://example.test/chapter/1",
-                "extra": {"volumeName": "第一卷"},
+                "extra": {"volumeName": "正文卷"},
             },
             {
                 "index": 2,
                 "title": "第二章",
                 "chapterUrl": "https://example.test/chapter/2",
-                "extra": {"volumeName": "第一卷"},
+                "extra": {"volumeName": "正文卷"},
             },
             {
                 "index": 3,
                 "title": "第三章",
                 "chapterUrl": "https://example.test/chapter/3",
-                "extra": {"volumeName": "第二卷"},
+                "extra": {"volumeName": "死海骑士团"},
             },
         ]
     }
@@ -2181,10 +2181,10 @@ def test_legado_max_toc_inserts_volume_headers_without_changing_x_layout():
     assert len(x_toc["chapters"]) == 3
     assert not any(item.get("isVolume") for item in x_toc["chapters"])
     assert [item["title"] for item in max_toc["chapters"]] == [
-        "第一卷",
+        "第一卷 正文卷",
         "第一章",
         "第二章",
-        "第二卷",
+        "第二卷 死海骑士团",
         "第三章",
     ]
     volume_nodes = [item for item in max_toc["chapters"] if item.get("isVolume")]
