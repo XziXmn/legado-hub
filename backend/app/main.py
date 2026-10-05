@@ -229,36 +229,50 @@ def create_app(
         app.mount("/console-static", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="console-static")
         assets_dir = FRONTEND_DIST / "assets"
         if assets_dir.exists():
-            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="console-assets")
+
+            class _ImmutableAssetsStaticFiles(StaticFiles):
+                """Hashed asset filenames may be cached forever."""
+
+                async def get_response(self, path: str, scope: dict):
+                    response = await super().get_response(path, scope)
+                    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                    return response
+
+            app.mount("/assets", _ImmutableAssetsStaticFiles(directory=str(assets_dir)), name="console-assets")
+
+        def _spa_index_response() -> FileResponse:
+            # index.html must revalidate on every load or readers keep the
+            # previous deployment's UI after an upgrade.
+            return FileResponse(str(FRONTEND_DIST / "index.html"), headers={"Cache-Control": "no-cache"})
 
         @app.get("/")
         async def root_spa():
-            return FileResponse(str(FRONTEND_DIST / "index.html"))
+            return _spa_index_response()
 
         @app.get("/console")
         async def console_spa():
-            return FileResponse(str(FRONTEND_DIST / "index.html"))
+            return _spa_index_response()
 
         @app.get("/login")
         async def console_login_spa():
-            return FileResponse(str(FRONTEND_DIST / "index.html"))
+            return _spa_index_response()
 
         if entrypoint is EntryPoint.PUBLIC:
             @app.get("/console/subscription")
             async def console_subscription_spa():
-                return FileResponse(str(FRONTEND_DIST / "index.html"))
+                return _spa_index_response()
 
             @app.get("/console/library")
             async def console_library_spa():
-                return FileResponse(str(FRONTEND_DIST / "index.html"))
+                return _spa_index_response()
 
             @app.get("/console/library/{book_id}")
             async def console_library_book_spa(book_id: str):
-                return FileResponse(str(FRONTEND_DIST / "index.html"))
+                return _spa_index_response()
         else:
             @app.get("/console/{path:path}")
             async def console_spa_catchall(path: str):
-                return FileResponse(str(FRONTEND_DIST / "index.html"))
+                return _spa_index_response()
 
         @app.get("/favicon.svg")
         async def console_favicon():
