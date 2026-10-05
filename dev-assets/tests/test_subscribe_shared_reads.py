@@ -1223,7 +1223,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert "qingci" not in source["ruleToc"]["chapterUrl"].lower()
     assert "java.hexDecodeToString(payload)" in source["ruleContent"]["content"]
     assert "legadoHubAjax(contentUrl)" in source["ruleContent"]["content"]
-    assert "java.ajax(contentUrl)" not in source["ruleContent"]["content"]
+    assert "java.ajax(contentUrl)" in source["ruleContent"]["content"]
     assert 'legadoHubReviewRoot(contentUrl) + "/reviews"' not in source["ruleContent"]["content"]
     assert "hasReaderCapability" not in source["ruleContent"]["content"]
     assert "legadoHubDecorateChapterReviewOnly" not in source["jsLib"]
@@ -1427,11 +1427,18 @@ def test_generated_chapter_rule_never_returns_encoded_url_on_failure():
 const fs = require('fs');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const calls = [];
-const java = { hexDecodeToString: value => Buffer.from(value, 'hex').toString('utf8') };
+const java = {
+  hexDecodeToString: value => Buffer.from(value, 'hex').toString('utf8'),
+  ajax: value => {
+    calls.push(['direct', value]);
+    if (input.directError) throw new Error(input.directError);
+    return input.directResponse;
+  }
+};
 function legadoHubRewriteApiUrl(value) { return value; }
 function legadoHubAjax(value) {
-  calls.push(value);
-  if (input.error) throw new Error(input.error);
+  calls.push(['helper', value]);
+  if (input.helperError) throw new Error(input.helperError);
   return input.response;
 }
 let result = Buffer.from(input.url).toString('hex');
@@ -1450,10 +1457,17 @@ try {
     for reader, source in enumerate(sources):
         rule = source["ruleContent"]["content"]
 
-        def run_rule(*, response: str = "", error: str = "") -> dict:
+        def run_rule(
+            *, response: str = "", helper_error: str = "",
+            direct_response: str = "", direct_error: str = "",
+        ) -> dict:
             completed = subprocess.run(
                 [node, "-e", harness],
-                input=json.dumps({"rule": rule, "url": url, "response": response, "error": error}),
+                input=json.dumps({
+                    "rule": rule, "url": url, "response": response,
+                    "helperError": helper_error, "directResponse": direct_response,
+                    "directError": direct_error,
+                }),
                 text=True,
                 encoding="utf-8",
                 capture_output=True,
@@ -1464,18 +1478,31 @@ try {
         success = run_rule(response=json.dumps({"content": "第一段\n\n第二段"}))
         assert success["ok"] is True
         assert success["result"] == "第一段<br><br>第二段"
-        assert success["calls"] == [url + ("?reviewBubbles=1" if reader else "")]
+        chapter_url = url + ("?reviewBubbles=1" if reader else "")
+        assert success["calls"] == [["helper", chapter_url]]
 
-        for response, error, expected in (
-            ("", "temporary timeout", "章节请求失败"),
-            ("not-json", "", "章节接口返回无效 JSON"),
-            (json.dumps({"detail": "Unauthorized"}), "", "章节接口未返回正文: Unauthorized"),
-            (json.dumps({"content": ""}), "", "章节正文为空"),
+        fallback = run_rule(
+            helper_error="java.ajax is not a function",
+            direct_response=json.dumps({"content": "回退正文"}),
+        )
+        assert fallback["ok"] is True
+        assert fallback["result"] == "回退正文"
+        assert fallback["calls"] == [["helper", chapter_url], ["direct", chapter_url]]
+
+        for response, expected in (
+            ("not-json", "章节接口返回无效 JSON"),
+            (json.dumps({"detail": "Unauthorized"}), "章节接口未返回正文: Unauthorized"),
+            (json.dumps({"content": ""}), "章节正文为空"),
         ):
-            failed = run_rule(response=response, error=error)
+            failed = run_rule(response=response)
             assert failed["ok"] is False
             assert expected in failed["error"]
             assert "68747470" not in failed["error"]
+
+        failed_requests = run_rule(helper_error="temporary timeout", direct_error="still offline")
+        assert failed_requests["ok"] is False
+        assert "章节请求失败" in failed_requests["error"]
+        assert "68747470" not in failed_requests["error"]
 
 
 def test_legado_max_bubbles_preserve_paragraphs_and_click_targets():

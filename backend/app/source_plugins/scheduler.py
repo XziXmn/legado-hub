@@ -44,9 +44,7 @@ class _PluginRateLimiter:
         async with self._semaphore:
             if self._min_interval_seconds:
                 async with self._interval_lock:
-                    now = time.monotonic()
-                    wait_seconds = max(0.0, self._next_start_at - now)
-                    if wait_seconds:
+                    while (wait_seconds := self._next_start_at - time.monotonic()) > 0:
                         await asyncio.sleep(wait_seconds)
                     self._next_start_at = time.monotonic() + self._min_interval_seconds
             return await operation()

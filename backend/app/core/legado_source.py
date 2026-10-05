@@ -28,8 +28,8 @@ from app.core.public_security import (
 # - FORMAL app release (git tag vX.Y.Z): bump BOTH — version (shown in name /
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.32"
-# Last beta marker: chapter fetch errors must not become cached hex URLs (ms).
-_READER_RULE_RELEASED_AT_MS = 1790951148912
+# Last beta marker: preserve Max's direct chapter request fallback (ms).
+_READER_RULE_RELEASED_AT_MS = 1790957702178
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -811,9 +811,8 @@ def _build_source(
             "updateTime": "$.updateTime",
         },
         "ruleContent": {
-            # Must use legadoHubAjax (jsLib) so chapter fetch carries the same
-            # Bearer as search/toc. Failures must propagate instead of caching
-            # the data URL's hex payload as chapter text.
+            # Keep the direct request fallback for readers whose jsLib scope
+            # does not expose java.ajax. Neither failure may become chapter text.
             "content": '@js:\n'
             'var payload = String(result || "");\n'
             'var contentUrl;\n'
@@ -823,7 +822,10 @@ def _build_source(
             'contentUrl = legadoHubRewriteApiUrl(contentUrl);\n'
             + review_bubble_query
             + 'try { payload = String(legadoHubAjax(contentUrl) || ""); }\n'
-            'catch (e) { throw new Error("章节请求失败: " + e); }\n'
+            'catch (eAuth) {\n'
+            '  try { payload = String(java.ajax(contentUrl) || ""); }\n'
+            '  catch (eDirect) { throw new Error("章节请求失败: " + eDirect); }\n'
+            '}\n'
             'if (!payload) throw new Error("章节接口返回空响应");\n'
             'var chapterPayload;\n'
             'try { chapterPayload = JSON.parse(payload); }\n'
