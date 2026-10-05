@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -352,17 +353,29 @@ export function UsersPage() {
                       <TableCell className="whitespace-nowrap text-slate-500">{formatDate(item.updatedAt)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
-                          {item.role === "user" && (
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              aria-label={`查看 ${item.username} 的书源链接`}
-                              title="查看书源链接"
-                              disabled={linksLoadingFor === item.userId || deletePending}
-                              onClick={() => { void openUserLinks(item) }}
-                            >{linksLoadingFor === item.userId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}</Button>
+                          {item.role === "user" ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  aria-label={`打开 ${item.username} 的书源链接操作菜单`}
+                                  title="查看 / 重新生成书源链接"
+                                  disabled={linksLoadingFor === item.userId || deletePending}
+                                >{linksLoadingFor === item.userId ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}</Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onSelect={() => { void openUserLinks(item) }}>
+                                  <Link2 className="mr-2 h-4 w-4" />查看书源链接
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}>
+                                  <KeyRound className="mr-2 h-4 w-4" />重新生成授权码
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          ) : (
+                            !isCurrentUser && <Button variant="outline" size="icon" aria-label={resetLabel} title={resetLabel} disabled={deletePending} onClick={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}><KeyRound className="h-4 w-4" /></Button>
                           )}
-                          {!isCurrentUser && <Button variant="outline" size="icon" aria-label={resetLabel} title={resetLabel} disabled={deletePending} onClick={() => { setResetPassword(""); setResetError(""); setResetTarget(item) }}><KeyRound className="h-4 w-4" /></Button>}
                           <Button
                             variant="outline" size="icon" aria-label={`撤销 ${item.username} 的登录会话`} title={isCurrentUser ? "当前会话请使用退出登录" : "撤销全部登录会话"}
                             disabled={isCurrentUser || revokePending || deletePending}
