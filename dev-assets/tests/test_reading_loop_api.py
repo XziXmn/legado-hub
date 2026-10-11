@@ -355,6 +355,78 @@ def test_review_view_embedding_and_focused_paragraph_layout(fixture_client, monk
     ).status_code == 422
 
 
+def test_review_view_adopts_bearer_session_into_view_cookie(fixture_client, monkeypatch):
+    """The sheet hands the viewing WebView its own session cookie.
+
+    Legado Max opens the sheet with the book-source Login Header on the first
+    request only, so the page's own pagination and reply fetches arrive without a
+    credential and used to fail with 401 ("加载失败，点击重试").
+    """
+    import app.api.legado as legado_api
+    from app.main import app
+    from app.services.aggregate_virtual_source import VIRTUAL_SOURCE_ID, make_aggregate_chapter_url
+    from app.source_plugins.id_codec import encode_chapter_id
+
+    chapter_id = encode_chapter_id(
+        VIRTUAL_SOURCE_ID,
+        make_aggregate_chapter_url("book-1", "chapter-1", index=1),
+    )
+    monkeypatch.setattr(
+        legado_api.library_books_service,
+        "legado_chapter",
+        lambda _chapter_id: {"title": "第一章"},
+    )
+
+    async def empty_reviews(_chapter_id: str, **_kwargs) -> dict:
+        return {
+            "authorReviews": [],
+            "chapterEnd": [],
+            "hotParagraphReviews": [],
+            "summary": {"totalReviews": 0, "chapterEndCount": 0},
+        }
+
+    async def empty_paragraph_reviews(
+        _self,
+        _chapter_id: str,
+        _paragraph_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict:
+        return {
+            "comments": [],
+            "totalCount": 0,
+            "page": page,
+            "pageSize": page_size,
+            "hasMore": False,
+        }
+
+    monkeypatch.setattr(legado_api, "_chapter_reviews", empty_reviews)
+    monkeypatch.setattr(legado_api.Catalog, "paragraph_reviews", empty_paragraph_reviews)
+
+    session_id = fixture_client.cookies.get("legadohub_session")
+    assert session_id
+
+    header_signed = TestClient(app)
+    response = header_signed.get(
+        f"/api/legado/chapter/{chapter_id}/reviews/view",
+        headers={"Authorization": f"Bearer {session_id}"},
+    )
+
+    assert response.status_code == 200
+    assert response.cookies.get("legadohub_session") == session_id
+    assert "httponly" in response.headers["set-cookie"].lower()
+
+    # The WebView keeps that cookie, so later same-origin fetches authenticate
+    # without the header.
+    assert header_signed.cookies.get("legadohub_session") == session_id
+    paginated = header_signed.get(
+        f"/api/legado/chapter/{chapter_id}/reviews/view",
+        params={"tab": "paragraph", "paragraphId": 1, "page": 2, "pageSize": 10},
+    )
+    assert paginated.status_code == 200
+
+
 def test_reading_disabled_plugin_chapter_does_not_use_cached_content(fixture_client, monkeypatch):
     from app.services.catalog import Catalog
     from app.source_plugins.id_codec import encode_chapter_id
