@@ -30,6 +30,60 @@ def test_reply_detail_empty_and_failure_states(debug, failed, message):
     assert (container.get("data-reply-error") == "true") is failed
 
 
+def test_auto_paginated_lists_keep_container_when_a_follow_up_page_is_empty():
+    """Empty follow-up pages must still ship the list container.
+
+    The sheet pulls `#<list id>` out of every pagination response and appends its
+    children. When the source reported `hasMore` and then returned no rows, the
+    renderer swapped the container for the empty state, so the client threw
+    "评论分页结构不完整" and showed "网络错误，点击重试" on a healthy 200.
+    """
+    from lxml import html
+    from app.services.reading_reviews import render_chapter_reviews_html
+
+    reviews = {
+        "chapterEnd": [],
+        "chapterEndHot": [],
+        "hotParagraphReviews": [
+            {
+                "matchedText": "第一段正文",
+                "paragraphText": "第一段正文",
+                "matchedParagraphIndex": 0,
+                "matchedParagraphCount": 1,
+                "paragraphId": 7,
+                "commentCount": 12,
+                "topReviews": [],
+            }
+        ],
+        "summary": {"totalReviews": 12, "chapterEndCount": 0},
+    }
+    empty_page = {
+        "comments": [],
+        "totalCount": 12,
+        "page": 2,
+        "pageSize": 10,
+        "hasMore": False,
+    }
+
+    paragraph_view = render_chapter_reviews_html(
+        chapter_title="测试",
+        reviews=reviews,
+        review_view_url="/reviews/view",
+        selected_paragraph_id=7,
+        paragraph_detail=empty_page,
+    )
+    assert html.fromstring(paragraph_view).get_element_by_id("paragraph-comments-7") is not None
+
+    chapter_view = render_chapter_reviews_html(
+        chapter_title="测试",
+        reviews=reviews,
+        review_view_url="/reviews/view",
+        active_tab="chapter",
+        chapter_detail=empty_page,
+    )
+    assert html.fromstring(chapter_view).get_element_by_id("chapter-comments") is not None
+
+
 def _write_reading_plugin(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     plugin_id = "fixture_reading"
     plugin_dir = tmp_path / plugin_id

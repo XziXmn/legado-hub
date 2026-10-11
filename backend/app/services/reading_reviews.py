@@ -432,9 +432,23 @@ def _folded_list(
     close_label: str = "收起",
     auto_load: bool = False,
 ) -> str:
-    if not items:
+    if not items and not auto_load:
         return _empty_state(empty_message)
     visible_count = max(1, visible_count)
+    auto_list_attr = ' data-auto-load-list="true"' if auto_load else ""
+    container = (
+        f'<div class="fold-list" id="{html.escape(list_id, quote=True)}" data-fold-list{auto_list_attr} '
+        f'data-visible-count="{visible_count}">'
+        + "".join(items)
+        + '</div>'
+    )
+    if not items:
+        # Auto-paginated lists must keep their container on every page. The reader
+        # pulls `#<list id>` out of each follow-up response and appends its
+        # children, so swapping the container for the empty state turned a healthy
+        # 200 (source said hasMore, then returned no rows) into a bogus
+        # "网络错误，点击重试" in the sheet.
+        return container + _empty_state(empty_message)
     toggle = ""
     if len(items) > visible_count:
         auto_toggle_attr = ' data-auto-fold-toggle="true"' if auto_load else ""
@@ -445,14 +459,7 @@ def _folded_list(
             f'data-open-label="{html.escape(open_label, quote=True)}" '
             f'data-close-label="{html.escape(close_label, quote=True)}">{html.escape(open_label)}</button>'
         )
-    auto_list_attr = ' data-auto-load-list="true"' if auto_load else ""
-    return (
-        f'<div class="fold-list" id="{html.escape(list_id, quote=True)}" data-fold-list{auto_list_attr} '
-        f'data-visible-count="{visible_count}">'
-        + "".join(items)
-        + '</div>'
-        + toggle
-    )
+    return container + toggle
 
 
 def _pagination_nav(
@@ -1428,9 +1435,11 @@ async function loadNext(panel = activePanel()) {
     const listId = currentNav?.dataset.listId || "";
     const currentList = listId ? document.getElementById(listId) : null;
     const sourceList = listId ? source.getElementById(listId) : null;
-    if (!sourcePanel || !currentList || !sourceList) throw new Error("评论分页结构不完整");
+    if (!sourcePanel || !currentList) throw new Error("评论分页结构不完整");
 
-    appendUnique(currentList, sourceList);
+    /* A follow-up page may legitimately carry no rows; that is the end of the
+       list, not a transport failure. */
+    if (sourceList) appendUnique(currentList, sourceList);
     bindReplyToggles(currentList);
     bindFoldToggles(currentList);
     loadedUrls.add(link.href);
