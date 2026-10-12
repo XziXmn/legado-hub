@@ -130,6 +130,34 @@ def _public_text(value: Any, *, max_length: int) -> str:
     return str(value or "").strip()[:max_length]
 
 
+def _chinese_volume_number(value: int) -> str:
+    digits = "零一二三四五六七八九"
+    units = ("", "十", "百", "千")
+    number = max(0, int(value))
+    if number == 0:
+        return digits[0]
+    if number < 10:
+        return digits[number]
+    chars: list[str] = []
+    zero_pending = False
+    text = str(number)
+    for offset, raw_digit in enumerate(text):
+        digit = int(raw_digit)
+        position = len(text) - offset - 1
+        if digit:
+            if zero_pending:
+                chars.append(digits[0])
+            chars.append(digits[digit])
+            chars.append(units[position])
+            zero_pending = False
+        elif chars:
+            zero_pending = True
+    result = "".join(chars)
+    if result.startswith("一十"):
+        result = result[1:]
+    return result
+
+
 def _public_book_response(
     data: dict,
     *,
@@ -163,11 +191,19 @@ def _public_toc_response(
     source_id: str,
     book_id: str,
     base_api: str,
+    reader: str = "x",
 ) -> dict:
     chapters = []
+    current_volume = ""
+    volume_number = 0
     for position, raw in enumerate(result.get("chapters", []) or [], start=1):
         if not isinstance(raw, dict):
             continue
+        extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+        volume_name = _public_text(
+            raw.get("volumeName") or extra.get("volumeName"),
+            max_length=500,
+        )
         chapter_id = _public_text(raw.get("chapterId"), max_length=_MAX_EXTERNAL_ID_LENGTH)
         if source_id != VIRTUAL_SOURCE_ID:
             raw_chapter_url = _public_text(
@@ -189,19 +225,33 @@ def _public_toc_response(
         preview_only = bool(raw.get("previewOnly", False))
         is_vip = bool(raw.get("isVip", False))
         is_paid = bool(raw.get("isPaid", is_vip))
+        if reader == "max" and volume_name:
+            if volume_name != current_volume:
+                volume_number += 1
+                chapters.append(
+                    {
+                        "sourceId": source_id,
+                        "index": chapter_index,
+                        "title": f"第{_chinese_volume_number(volume_number)}卷 {volume_name}",
+                        "chapterUrl": "",
+                        "isVolume": True,
+                    }
+                )
+            current_volume = volume_name
+        chapter_payload = {
+            "sourceId": source_id,
+            "chapterId": chapter_id,
+            "index": chapter_index,
+            "title": _public_text(raw.get("title"), max_length=1000),
+            "chapterUrl": f"{base_api}/api/legado/chapter/{chapter_id}",
+            "updateTime": format_reading_update_time(raw.get("updateTime", "")),
+            "isVip": is_vip,
+            "isPaid": is_paid,
+            "isPay": bool(raw.get("isPay", is_vip and not preview_only)),
+            "previewOnly": preview_only,
+        }
         chapters.append(
-            {
-                "sourceId": source_id,
-                "chapterId": chapter_id,
-                "index": chapter_index,
-                "title": _public_text(raw.get("title"), max_length=1000),
-                "chapterUrl": f"{base_api}/api/legado/chapter/{chapter_id}",
-                "updateTime": format_reading_update_time(raw.get("updateTime", "")),
-                "isVip": is_vip,
-                "isPaid": is_paid,
-                "isPay": bool(raw.get("isPay", is_vip and not preview_only)),
-                "previewOnly": preview_only,
-            }
+            chapter_payload
         )
     return {
         "implemented": True,
@@ -360,7 +410,10 @@ async def get_book(request: Request, book_id: str) -> dict:
 @router.get("/book/{book_id}/toc")
 async def get_toc(request: Request, book_id: str) -> dict:
     user = auth_service.require_reading_user(request, touch=False)
-    _reject_query_anomalies(request, {"lane"})
+    _reject_query_anomalies(request, {"lane", "reader"})
+    reader = request.query_params.get("reader") or "x"
+    if reader not in ("x", "max"):
+        raise HTTPException(status_code=422, detail="reader 无效")
     book_id = _validated_external_id(book_id, label="书籍")
     source_id, book_url = _decode_book_identity(book_id)
     with reading_access_limiter.guard(user.user_id, "metadata"):
@@ -374,6 +427,7 @@ async def get_toc(request: Request, book_id: str) -> dict:
                 source_id=source_id,
                 book_id=book_id,
                 base_api=base_api,
+                reader=reader,
             )
         catalog = Catalog(base_api=base_api)
         _require_third_party_plugin(
@@ -389,6 +443,7 @@ async def get_toc(request: Request, book_id: str) -> dict:
             source_id=source_id,
             book_id=book_id,
             base_api=base_api,
+            reader=reader,
         )
 
 

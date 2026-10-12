@@ -605,7 +605,7 @@ class AggregateProcessor:
         with self._conn() as conn:
             # ── build current chapter map from DB ──────────────────────
             existing_rows = conn.execute(
-                "SELECT chapter_id, source_chapter_id, chapter_index, title FROM aggregate_chapter_tasks WHERE aggregate_book_id = ?",
+                "SELECT chapter_id, source_chapter_id, chapter_index, title, status, volume_name FROM aggregate_chapter_tasks WHERE aggregate_book_id = ?",
                 (aggregate_book_id,),
             ).fetchall()
             existing_by_source: dict[str, dict] = {}
@@ -613,6 +613,7 @@ class AggregateProcessor:
                 existing_by_source[row[1]] = {
                     "chapterId": row[0], "sourceChapterId": row[1],
                     "chapterIndex": row[2], "title": row[3],
+                    "status": row[4], "volumeName": row[5] or "",
                 }
 
             incoming_source_ids: set[str] = set()
@@ -642,6 +643,10 @@ class AggregateProcessor:
 
             for index, chapter in enumerate(chapters, start=1):
                 raw_url = chapter.get("rawChapterUrl") or chapter.get("chapterUrl", "")
+                extra = chapter.get("extra") if isinstance(chapter.get("extra"), dict) else {}
+                volume_name = str(
+                    chapter.get("volumeName") or extra.get("volumeName") or ""
+                ).strip()
                 source_chapter_id = chapter.get("chapterId") or (
                     encode_chapter_id(source_id, raw_url) if source_id and raw_url else f"{aggregate_book_id}:{index}"
                 )
@@ -662,18 +667,25 @@ class AggregateProcessor:
 
                 existing = existing_by_source.get(source_chapter_id)
                 if existing:
-                    # Chapter exists — update title/index if changed.
-                    needs_update = (
+                    # Volume metadata may change after processing and must remain current.
+                    volume_changed = bool(volume_name) and existing["volumeName"] != volume_name
+                    title_or_index_changed = (
                         existing["title"] != chapter.get("title", "")
                         or existing["chapterIndex"] != index
                     )
-                    if needs_update:
+                    if volume_changed:
+                        conn.execute(
+                            "UPDATE aggregate_chapter_tasks SET volume_name = ?, updated_at = ? WHERE chapter_id = ?",
+                            (volume_name, now, existing["chapterId"]),
+                        )
+                    if title_or_index_changed and existing["status"] not in ("processed", "fallback"):
                         conn.execute(
                             """UPDATE aggregate_chapter_tasks
                                SET title = ?, chapter_index = ?, updated_at = ?
                                WHERE chapter_id = ? AND status NOT IN ('processed', 'fallback')""",
                             (chapter.get("title", ""), index, now, existing["chapterId"]),
                         )
+                    if volume_changed or (title_or_index_changed and existing["status"] not in ("processed", "fallback")):
                         updated_count += 1
                 else:
                     # New chapter.
@@ -681,8 +693,8 @@ class AggregateProcessor:
                     placeholder_flag = 1 if initial_status == "placeholder" else 0
                     conn.execute(
                         """INSERT OR IGNORE INTO aggregate_chapter_tasks
-                           (chapter_id, aggregate_book_id, source_chapter_id, chapter_index, title, status, placeholder, primary_source_chapter_url, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (chapter_id, aggregate_book_id, source_chapter_id, chapter_index, title, status, placeholder, primary_source_chapter_url, volume_name, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             chapter_id,
                             aggregate_book_id,
@@ -692,6 +704,7 @@ class AggregateProcessor:
                             initial_status,
                             placeholder_flag,
                             raw_url,
+                            volume_name,
                             now,
                             now,
                         ),
@@ -5115,6 +5128,11 @@ class AggregateProcessor:
             "title": title,
             "file": file,
             "status": trace_payload.get("chapterStatus", "") or "unknown",
+            **(
+                {"volumeName": str(trace_payload.get("volumeName") or "").strip()}
+                if str(trace_payload.get("volumeName") or "").strip()
+                else {}
+            ),
             "isVip": bool(trace_payload.get("isVip", False)),
             "officialWordCount": int(trace_payload.get("officialWordCount", 0) or 0),
             "officialPreviewWords": trace_payload.get("officialPreviewWords"),
@@ -5295,6 +5313,7 @@ class AggregateProcessor:
             "chapterId": chapter_row["chapter_id"] or "",
             "chapterIndex": int(chapter_row["chapter_index"] or 0),
             "chapterTitle": chapter_row["title"] or "",
+            "volumeName": str(chapter_row.get("volume_name") or "").strip(),
             "chapterStatus": chapter_status,
             "proofreadComplete": chapter_status == "proofread_complete",
             "previewOnly": bool(chapter_row["preview_only"]),
@@ -5486,7 +5505,7 @@ class AggregateProcessor:
                    preview_only, primary_source_chapter_url, content_file_path,
                    last_processed_at, source_snapshot_refs_json, fallback_source_id, source_alignment_json,
                    trace_hash, ai_model, ai_prompt_tokens, ai_completion_tokens, ai_total_tokens,
-                   ai_latency_ms, deviation_score, ai_self_score
+                    ai_latency_ms, deviation_score, ai_self_score, volume_name
             FROM aggregate_chapter_tasks
             WHERE aggregate_book_id = ?
             ORDER BY chapter_index ASC, created_at ASC
@@ -5518,6 +5537,7 @@ class AggregateProcessor:
                 "ai_latency_ms": row[18],
                 "deviation_score": row[19],
                 "ai_self_score": row[20],
+                "volume_name": row[21],
             }
             chapter_title = row[3] or title or f"第{int(row[2] or 0)}章"
             has_content = str(row[4]) in {"processed", "fallback"}
@@ -5563,6 +5583,8 @@ class AggregateProcessor:
                         ),
                     }
                 )
+                if row[21]:
+                    chapter_entries[-1]["volumeName"] = str(row[21]).strip()
 
         metadata_payload = self._build_shared_metadata_payload(
             conn=conn,
@@ -5871,6 +5893,14 @@ class AggregateProcessor:
         lexicon_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         book = self._library_books().get_book(aggregate_book_id) or {}
+        volume_name = ""
+        if chapter_index:
+            with self._conn() as conn:
+                volume_row = conn.execute(
+                    "SELECT volume_name FROM aggregate_chapter_tasks WHERE aggregate_book_id = ? AND chapter_index = ? LIMIT 1",
+                    (aggregate_book_id, chapter_index),
+                ).fetchone()
+            volume_name = str((volume_row[0] if volume_row else "") or "").strip()
         candidate_sources = []
         with self._conn() as conn:
             rows = conn.execute(
@@ -5985,6 +6015,7 @@ class AggregateProcessor:
             "aggregateBookId": aggregate_book_id,
             "chapterIndex": chapter_index,
             "chapterTitle": title,
+            "volumeName": volume_name,
             "chapterStatus": chapter_status,
             "proofreadComplete": False,
             "stage3Verdict": "",

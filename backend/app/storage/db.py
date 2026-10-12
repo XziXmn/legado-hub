@@ -349,6 +349,7 @@ CREATE TABLE IF NOT EXISTS aggregate_chapter_tasks (
     deviation_score REAL DEFAULT 0.0,
     ai_self_score REAL DEFAULT 0.0,
     fallback_source_id TEXT,
+    volume_name TEXT DEFAULT '',
     source_alignment_json TEXT,
     manual_supplement INTEGER DEFAULT 0,
     manual_supplement_json TEXT DEFAULT '',
@@ -530,6 +531,7 @@ def _ensure_shared_library_schema(conn: sqlite3.Connection) -> None:
             "preview_retry_count": "INTEGER DEFAULT 0",
             "manual_supplement": "INTEGER DEFAULT 0",
             "manual_supplement_json": "TEXT DEFAULT ''",
+            "volume_name": "TEXT DEFAULT ''",
         }
         for name, sql_type in chapter_columns.items():
             _ensure_column(conn, "aggregate_chapter_tasks", name, sql_type)

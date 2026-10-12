@@ -1162,8 +1162,8 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
                 """
                 INSERT INTO aggregate_chapter_tasks (
                     chapter_id, aggregate_book_id, source_chapter_id,
-                    chapter_index, title, status, preview_only
-                ) VALUES (?, ?, ?, ?, ?, 'processed', ?)
+                    chapter_index, title, status, preview_only, volume_name
+                ) VALUES (?, ?, ?, ?, ?, 'processed', ?, ?)
                 """,
                 (
                     encode_chapter_id(VIRTUAL_SOURCE_ID, aggregate_url),
@@ -1172,6 +1172,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
                     index,
                     title,
                     int(index == 4),
+                    "正文卷" if index <= 2 else "死海骑士团",
                 ),
             )
         conn.execute(
@@ -1202,6 +1203,11 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert "/api/subscribe/legado/explore" in source["exploreUrl"]
     assert source["ruleToc"]["isVip"] == "$.isVip"
     assert source["ruleToc"]["isPay"] == "$.isPay"
+    assert "isVolume" not in source["ruleToc"]
+    assert "isVolume" in max_source["ruleToc"]
+    assert "reader=max" in max_source["ruleBookInfo"]["tocUrl"]
+    assert "result.isVolume" in max_source["ruleToc"]["chapterUrl"]
+    assert "reader=max" not in source["ruleBookInfo"]["tocUrl"]
     login_ui = json.loads(source["loginUi"])
     assert [item["name"] for item in login_ui] == ["订阅", "书库"]
     assert "/api/auth/access/redeem" in source["loginUrl"]
@@ -1332,6 +1338,13 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert chapters[-1]["isVip"] is True
     assert chapters[-1]["isPay"] is False
     assert chapters[-1]["previewOnly"] is True
+
+    max_toc = client.get(f"/api/legado/book/{book_id}/toc?reader=max")
+    assert max_toc.status_code == 200
+    assert [item["title"] for item in max_toc.json()["chapters"]] == [
+        "第一卷 正文卷", "第一章", "第二章", "第二卷 死海骑士团", "第三章", "第四章 付费",
+    ]
+    assert [item["chapterUrl"] for item in max_toc.json()["chapters"] if item.get("isVolume")] == ["", ""]
 
     free = client.get(chapters[0]["chapterUrl"].replace("http://testserver", ""))
     assert free.status_code == 200
@@ -2122,3 +2135,117 @@ def test_subscription_update_rate_limit_returns_structured_429(client, tmp_path,
         }
     finally:
         subscribe_api.subscription_rate_limiter.reset()
+
+
+def test_legado_max_toc_inserts_volume_headers_without_changing_x_layout():
+    from app.api.legado import _public_toc_response
+
+    result = {
+        "chapters": [
+            {
+                "index": 1,
+                "title": "第一章",
+                "chapterUrl": "https://example.test/chapter/1",
+                "extra": {"volumeName": "正文卷"},
+            },
+            {
+                "index": 2,
+                "title": "第二章",
+                "chapterUrl": "https://example.test/chapter/2",
+                "extra": {"volumeName": "正文卷"},
+            },
+            {
+                "index": 3,
+                "title": "第三章",
+                "chapterUrl": "https://example.test/chapter/3",
+                "extra": {"volumeName": "死海骑士团"},
+            },
+        ]
+    }
+
+    x_toc = _public_toc_response(
+        result,
+        source_id="fixture",
+        book_id="fixture:book",
+        base_api="http://testserver",
+        reader="x",
+    )
+    max_toc = _public_toc_response(
+        result,
+        source_id="fixture",
+        book_id="fixture:book",
+        base_api="http://testserver",
+        reader="max",
+    )
+
+    assert len(x_toc["chapters"]) == 3
+    assert not any(item.get("isVolume") for item in x_toc["chapters"])
+    assert [item["title"] for item in max_toc["chapters"]] == [
+        "第一卷 正文卷",
+        "第一章",
+        "第二章",
+        "第二卷 死海骑士团",
+        "第三章",
+    ]
+    volume_nodes = [item for item in max_toc["chapters"] if item.get("isVolume")]
+    assert len(volume_nodes) == 2
+    assert all(item["chapterUrl"] == "" for item in volume_nodes)
+
+
+def test_aggregate_toc_persists_volume_names_for_processed_chapters(tmp_path):
+    import sqlite3
+
+    from app.services.aggregate_processor import AggregateProcessor
+    from app.storage.db import initialize_database
+
+    db_path = tmp_path / "aggregate.db"
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO aggregate_book_tasks (
+                aggregate_book_id, name, author, primary_book_id,
+                primary_source_id, aggregate_payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("volume-book", "多卷测试", "作者", "fixture:book", "fixture", "{}"),
+        )
+        conn.commit()
+
+    processor = AggregateProcessor(db_path=db_path)
+    chapters = [
+        {
+            "chapterId": "fixture:1",
+            "title": "第一章",
+            "chapterUrl": "https://example.test/1",
+            "extra": {"volumeName": "第一卷"},
+        },
+        {
+            "chapterId": "fixture:2",
+            "title": "第二章",
+            "chapterUrl": "https://example.test/2",
+            "extra": {"volumeName": "第一卷"},
+        },
+    ]
+    result = processor.register_toc(
+        "volume-book",
+        {"primaryBookId": "fixture:book"},
+        chapters,
+    )
+    assert result["newChapters"] == 2
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT volume_name FROM aggregate_chapter_tasks WHERE chapter_index = 1"
+        ).fetchone() == ("第一卷",)
+        conn.execute(
+            "UPDATE aggregate_chapter_tasks SET status = 'processed' WHERE chapter_index = 1"
+        )
+        conn.commit()
+
+    chapters[0]["extra"]["volumeName"] = "序章"
+    processor.register_toc("volume-book", {"primaryBookId": "fixture:book"}, chapters)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT volume_name FROM aggregate_chapter_tasks WHERE chapter_index = 1"
+        ).fetchone() == ("序章",)

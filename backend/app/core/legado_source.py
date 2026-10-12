@@ -29,7 +29,7 @@ from app.core.public_security import (
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.34"
 # Last beta marker: preserve Max's direct chapter request fallback (ms).
-_READER_RULE_RELEASED_AT_MS = 1791187489355
+_READER_RULE_RELEASED_AT_MS = 1791200996908
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -731,6 +731,35 @@ def _build_source(
         if reader == "max"
         else ""
     )
+    toc_url_rule = (
+        "<js>\n"
+        "var tocUrl = String(result.tocUrl || '');\n"
+        "tocUrl + (tocUrl.indexOf('?') >= 0 ? '&' : '?') + 'reader=max';\n"
+        "</js>"
+        if reader == "max"
+        else "$.tocUrl"
+    )
+    chapter_url_rule = (
+        "<js>\n"
+        "var contentUrl = String(result.chapterUrl || '');\n"
+        "if (result && result.isVolume) {\n"
+        "  '';\n"
+        "} else {\n"
+        "  try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e) {}\n"
+        "  var metadata = {type: 'legadoHub'};\n"
+        "  `data:contentUrl;base64,${java.base64Encode(contentUrl)},${JSON.stringify(metadata)}`;\n"
+        "}\n"
+        "</js>"
+        if reader == "max"
+        else (
+            "<js>\n"
+            "var contentUrl = String(result.chapterUrl || '');\n"
+            "try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e) {}\n"
+            "var metadata = {type: 'legadoHub'};\n"
+            "`data:contentUrl;base64,${java.base64Encode(contentUrl)},${JSON.stringify(metadata)}`;\n"
+            "</js>"
+        )
+    )
     source = {
         "bookSourceName": f"{name}({_READER_RULE_VERSION})",
         "bookSourceGroup": group,
@@ -792,20 +821,13 @@ def _build_source(
             "lastChapter": "$.lastChapter",
             "wordCount": "$.wordCount",
             "updateTime": "$.updateTime",
-            "tocUrl": "$.tocUrl",
+            "tocUrl": toc_url_rule,
             "canReName": "1",
         },
         "ruleToc": {
             "chapterList": "$.chapters",
             "chapterName": "$.title",
-            "chapterUrl": (
-                "<js>\n"
-                "var contentUrl = String(result.chapterUrl || '');\n"
-                "try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e) {}\n"
-                "var metadata = {type: 'legadoHub'};\n"
-                "`data:contentUrl;base64,${java.base64Encode(contentUrl)},${JSON.stringify(metadata)}`;\n"
-                "</js>"
-            ),
+            "chapterUrl": chapter_url_rule,
             "isVip": "$.isVip",
             "isPay": "$.isPay",
             "updateTime": "$.updateTime",
@@ -871,6 +893,7 @@ def _build_source(
         "jsLib": _reader_js_lib(base_api, access_code=access_code),
     }
     if reader == "max":
+        source["ruleToc"]["isVolume"] = "$.isVolume"
         source["ruleContent"].pop("chapterComment")
     return source
 
