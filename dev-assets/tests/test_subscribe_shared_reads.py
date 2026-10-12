@@ -1203,8 +1203,9 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert "/api/subscribe/legado/explore" in source["exploreUrl"]
     assert source["ruleToc"]["isVip"] == "$.isVip"
     assert source["ruleToc"]["isPay"] == "$.isPay"
-    assert "isVolume" not in source["ruleToc"]
+    assert "isVolume" in source["ruleToc"]
     assert "isVolume" in max_source["ruleToc"]
+    assert "result.isVolume" in source["ruleToc"]["chapterUrl"]
     assert "reader=max" in max_source["ruleBookInfo"]["tocUrl"]
     assert "result.isVolume" in max_source["ruleToc"]["chapterUrl"]
     assert "reader=max" not in source["ruleBookInfo"]["tocUrl"]
@@ -1330,23 +1331,35 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert toc.status_code == 200
     assert markdown_reads == []
     chapters = toc.json()["chapters"]
-    assert len(chapters) == 4
-    assert chapters[0]["isVip"] is False
-    assert chapters[0]["isPay"] is False
-    assert chapters[0]["previewOnly"] is False
-    assert chapters[0]["updateTime"] == "2026-07-21 03:28"
-    assert chapters[-1]["isVip"] is True
-    assert chapters[-1]["isPay"] is False
-    assert chapters[-1]["previewOnly"] is True
+    # Volume headers are generic: the default (X) reader sees them too.
+    assert len(chapters) == 6
+    volume_rows = [item for item in chapters if item.get("isVolume")]
+    assert [item["title"] for item in volume_rows] == ["第一卷 正文卷", "第二卷 死海骑士团"]
+    assert all(item["chapterUrl"] == "" for item in volume_rows)
+    real_chapters = [item for item in chapters if not item.get("isVolume")]
+    assert real_chapters[0]["isVip"] is False
+    assert real_chapters[0]["isPay"] is False
+    assert real_chapters[0]["previewOnly"] is False
+    assert real_chapters[0]["updateTime"] == "2026-07-21 03:28"
+    assert real_chapters[-1]["isVip"] is True
+    assert real_chapters[-1]["isPay"] is False
+    assert real_chapters[-1]["previewOnly"] is True
 
+    # Volume headers are generic: both flavours ship them, X via default reader.
+    x_toc_response = client.get(f"/api/legado/book/{book_id}/toc")
+    assert x_toc_response.status_code == 200
     max_toc = client.get(f"/api/legado/book/{book_id}/toc?reader=max")
     assert max_toc.status_code == 200
-    assert [item["title"] for item in max_toc.json()["chapters"]] == [
+    expected_titles = [
         "第一卷 正文卷", "第一章", "第二章", "第二卷 死海骑士团", "第三章", "第四章 付费",
     ]
-    assert [item["chapterUrl"] for item in max_toc.json()["chapters"] if item.get("isVolume")] == ["", ""]
+    assert [item["title"] for item in x_toc_response.json()["chapters"]] == expected_titles
+    assert [item["title"] for item in max_toc.json()["chapters"]] == expected_titles
+    for toc in (x_toc_response.json(), max_toc.json()):
+        volume_rows = [item for item in toc["chapters"] if item.get("isVolume")]
+        assert [item["chapterUrl"] for item in volume_rows] == ["", ""]
 
-    free = client.get(chapters[0]["chapterUrl"].replace("http://testserver", ""))
+    free = client.get(real_chapters[0]["chapterUrl"].replace("http://testserver", ""))
     assert free.status_code == 200
     assert "完整免费正文" in free.json()["content"]
     assert free.json()["extra"]["contentAccess"] == "full"
@@ -1369,7 +1382,7 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
 
     monkeypatch.setattr(legado_api, "_chapter_reviews", one_review)
     max_free = client.get(
-        chapters[0]["chapterUrl"].replace("http://testserver", ""),
+        real_chapters[0]["chapterUrl"].replace("http://testserver", ""),
         params={"reviewBubbles": "1"},
     )
     assert max_free.status_code == 200
@@ -1377,12 +1390,12 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert "paragraphId=12" in max_free.json()["content"]
     assert "bubble://" not in free.json()["content"]
     assert client.get(
-        chapters[0]["chapterUrl"].replace("http://testserver", ""),
+        real_chapters[0]["chapterUrl"].replace("http://testserver", ""),
         params={"reviewBubbles": "wrong"},
     ).status_code == 422
     monkeypatch.setattr(legado_api, "_chapter_reviews", empty_reviews)
 
-    preview = client.get(chapters[-1]["chapterUrl"].replace("http://testserver", ""))
+    preview = client.get(real_chapters[-1]["chapterUrl"].replace("http://testserver", ""))
     assert preview.status_code == 200
     assert "付费预览正文" in preview.json()["content"]
     assert preview.json()["extra"]["contentAccess"] == "preview"
@@ -2137,7 +2150,7 @@ def test_subscription_update_rate_limit_returns_structured_429(client, tmp_path,
         subscribe_api.subscription_rate_limiter.reset()
 
 
-def test_legado_max_toc_inserts_volume_headers_without_changing_x_layout():
+def test_toc_volume_headers_are_generic_across_readers():
     from app.api.legado import _public_toc_response
 
     result = {
@@ -2178,18 +2191,19 @@ def test_legado_max_toc_inserts_volume_headers_without_changing_x_layout():
         reader="max",
     )
 
-    assert len(x_toc["chapters"]) == 3
-    assert not any(item.get("isVolume") for item in x_toc["chapters"])
-    assert [item["title"] for item in max_toc["chapters"]] == [
+    expected_titles = [
         "第一卷 正文卷",
         "第一章",
         "第二章",
         "第二卷 死海骑士团",
         "第三章",
     ]
-    volume_nodes = [item for item in max_toc["chapters"] if item.get("isVolume")]
-    assert len(volume_nodes) == 2
-    assert all(item["chapterUrl"] == "" for item in volume_nodes)
+    assert [item["title"] for item in x_toc["chapters"]] == expected_titles
+    assert [item["title"] for item in max_toc["chapters"]] == expected_titles
+    for toc in (x_toc, max_toc):
+        volume_nodes = [item for item in toc["chapters"] if item.get("isVolume")]
+        assert len(volume_nodes) == 2
+        assert all(item["chapterUrl"] == "" for item in volume_nodes)
 
 
 def test_aggregate_toc_persists_volume_names_for_processed_chapters(tmp_path):

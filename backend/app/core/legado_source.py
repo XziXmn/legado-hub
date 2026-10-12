@@ -29,7 +29,7 @@ from app.core.public_security import (
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.34"
 # Last beta marker: preserve Max's direct chapter request fallback (ms).
-_READER_RULE_RELEASED_AT_MS = 1791200996908
+_READER_RULE_RELEASED_AT_MS = 1791788540670
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -739,6 +739,8 @@ def _build_source(
         if reader == "max"
         else "$.tocUrl"
     )
+    # Volume rows ship an empty chapterUrl in both flavours; the guard keeps
+    # the data URL from being built for them.
     chapter_url_rule = (
         "<js>\n"
         "var contentUrl = String(result.chapterUrl || '');\n"
@@ -750,15 +752,6 @@ def _build_source(
         "  `data:contentUrl;base64,${java.base64Encode(contentUrl)},${JSON.stringify(metadata)}`;\n"
         "}\n"
         "</js>"
-        if reader == "max"
-        else (
-            "<js>\n"
-            "var contentUrl = String(result.chapterUrl || '');\n"
-            "try { contentUrl = legadoHubRewriteApiUrl(contentUrl); } catch (e) {}\n"
-            "var metadata = {type: 'legadoHub'};\n"
-            "`data:contentUrl;base64,${java.base64Encode(contentUrl)},${JSON.stringify(metadata)}`;\n"
-            "</js>"
-        )
     )
     source = {
         "bookSourceName": f"{name}({_READER_RULE_VERSION})",
@@ -892,8 +885,8 @@ def _build_source(
         },
         "jsLib": _reader_js_lib(base_api, access_code=access_code),
     }
+    source["ruleToc"]["isVolume"] = "$.isVolume"
     if reader == "max":
-        source["ruleToc"]["isVolume"] = "$.isVolume"
         source["ruleContent"].pop("chapterComment")
     return source
 

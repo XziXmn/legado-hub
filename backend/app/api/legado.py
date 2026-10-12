@@ -225,7 +225,7 @@ def _public_toc_response(
         preview_only = bool(raw.get("previewOnly", False))
         is_vip = bool(raw.get("isVip", False))
         is_paid = bool(raw.get("isPaid", is_vip))
-        if reader == "max" and volume_name:
+        if volume_name:
             if volume_name != current_volume:
                 volume_number += 1
                 chapters.append(
