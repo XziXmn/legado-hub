@@ -28,7 +28,7 @@ from app.services.reading_reviews import (
     render_chapter_reviews_html,
 )
 from app.services.user_auth import auth_service
-from app.core.public_security import get_public_base_url
+from app.core.public_security import get_public_base_url, request_uses_https
 from app.services.reading_limits import reading_access_limiter
 
 router = APIRouter(prefix="/api/legado")
@@ -522,6 +522,23 @@ async def get_chapter_reviews(request: Request, chapter_id: str) -> dict:
         return await _chapter_reviews(chapter_id, catalog=catalog)
 
 
+def _adopt_bearer_session_for_view(request: Request, response: HTMLResponse) -> HTMLResponse:
+    """Plant the reading session as a same-origin cookie for the views page.
+
+    Legado Max opens the review sheet through ``java.showBrowser`` and signs only
+    that first request with the book-source Login Header. The sheet's own
+    ``fetch`` calls for pagination and reply expansion therefore arrive without
+    any Authorization header, and without a cookie they fail with 401 — user
+    visible as "加载失败，点击重试". Re-issuing the already-authenticated session
+    as an HttpOnly cookie gives the viewing WebView its own credentials, exactly
+    like the access-code redeem flow does for the Console.
+    """
+    token = auth_service.bearer_session_token(request)
+    if token:
+        auth_service.set_session_cookie(response, token, secure=request_uses_https(request))
+    return response
+
+
 @router.get("/chapter/{chapter_id}/reviews/view", response_class=HTMLResponse)
 async def get_chapter_review_view(
     request: Request,
@@ -638,20 +655,23 @@ async def get_chapter_review_view(
             )
         base_api = get_public_base_url(request)
         review_view_url = f"{base_api}/api/legado/chapter/{chapter_id}/reviews/view"
-        return HTMLResponse(
-            render_chapter_reviews_html(
-                chapter_title=str(chapter.get("title") or "本章评论"),
-                reviews=reviews,
-                review_view_url=review_view_url,
-                active_tab=tab,
-                selected_paragraph_id=parsed_paragraph_id,
-                paragraph_detail=paragraph_detail,
-                page_hot_detail=page_hot_detail,
-                chapter_detail=chapter_detail,
-                reply_detail=reply_detail,
+        return _adopt_bearer_session_for_view(
+            request,
+            HTMLResponse(
+                render_chapter_reviews_html(
+                    chapter_title=str(chapter.get("title") or "本章评论"),
+                    reviews=reviews,
+                    review_view_url=review_view_url,
+                    active_tab=tab,
+                    selected_paragraph_id=parsed_paragraph_id,
+                    paragraph_detail=paragraph_detail,
+                    page_hot_detail=page_hot_detail,
+                    chapter_detail=chapter_detail,
+                    reply_detail=reply_detail,
+                ),
+                headers={
+                    "X-Frame-Options": "SAMEORIGIN",
+                    "Content-Security-Policy": "frame-ancestors 'self'; base-uri 'self'; object-src 'none'",
+                },
             ),
-            headers={
-                "X-Frame-Options": "SAMEORIGIN",
-                "Content-Security-Policy": "frame-ancestors 'self'; base-uri 'self'; object-src 'none'",
-            },
         )

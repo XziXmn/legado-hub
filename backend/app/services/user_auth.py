@@ -937,6 +937,18 @@ class UserAuthService:
             return token
         return request.cookies.get(SESSION_COOKIE_NAME, "")
 
+    def bearer_session_token(self, request: Request) -> str:
+        """Return the session token only when it arrived as ``Authorization: Bearer``.
+
+        Readers sign reading requests with a Login Header instead of a cookie. A
+        WebView that receives that header on the first request cannot replay it on
+        the page's own subrequests, so an authenticated HTML response may mirror the
+        token back as a same-origin cookie and adopt the viewing browser session.
+        """
+        if not request.headers.getlist("authorization"):
+            return ""
+        return self.session_token_from_request(request)
+
     def current_user(self, request: Request, *, touch: bool = True) -> AuthUser | None:
         session_id = self.session_token_from_request(request)
         if not session_id:
