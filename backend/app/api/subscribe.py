@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.core.legado_source import generate_legado_source
 from app.services.aggregate_processor import AggregateProcessor
@@ -29,7 +30,7 @@ from app.services.user_subscriptions import (
     subscription_rate_limiter,
     user_subscriptions_service,
 )
-from app.services.user_auth import auth_service
+from app.services.user_auth import READING_LOGIN_REQUIRED_MESSAGE, auth_service
 from app.source_plugins.id_codec import decode_book_id, decode_chapter_id
 from app.core.public_security import get_public_base_url, reading_network_lane
 from app.services.reading_limits import reading_access_limiter
@@ -1461,8 +1462,26 @@ async def cancel_legado_search(request: Request, job_id: str) -> dict:
 
 @router.get("/legado/explore")
 @public_router.get("/legado/explore")
-async def legado_explore(request: Request, sourceId: str = "", groupId: str = "", page: str = "1") -> dict:
-    user = auth_service.require_reading_user(request, touch=False)
+async def legado_explore(request: Request, sourceId: str = "", groupId: str = "", page: str = "1"):
+    try:
+        user = auth_service.require_reading_user(request, touch=False)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        # 冷启动后第一次探索请求必然先 401（书源登录头还没写入），由 loginCheckJs
+        # 读到 READING_LOGIN_REQUIRED_MESSAGE 后自动兑换并重试成功。但客户端在
+        # 探索链路里会把本源的 ruleBookInfo.init（"$.data"）套在这个响应上解析，
+        # 401 的 {"detail": ...} 没有 data/items 会让它抛 PathNotFoundException
+        # 并弹出错误窗。这里仍保持 401（否则触发不了兑换重试），只把响应体补成
+        # 可解析的空结构。
+        return JSONResponse(
+            status_code=401,
+            content={
+                "detail": getattr(exc, "detail", None) or READING_LOGIN_REQUIRED_MESSAGE,
+                "items": [],
+                "data": {"items": []},
+            },
+        )
     _reject_legado_query_anomalies(request, {"sourceId", "groupId", "page"})
     source_id = _validated_legado_identifier(sourceId, field="sourceId", allow_empty=True)
     group_id = _validated_legado_text(groupId, field="groupId", max_length=128)

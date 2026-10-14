@@ -112,7 +112,15 @@ def test_legado_manifest_is_anonymous_but_reading_requires_valid_bearer(client):
     for path in protected_paths:
         response = anonymous.get(path)
         assert response.status_code == 401
-        assert response.json() == {"detail": "当前未登陆，请登陆后使用。"}
+        if path == "/api/subscribe/legado/explore":
+            # 探索响应必须保持可解析：客户端会把 ruleBookInfo.init（"$.data"）
+            # 套在它上面解析，401 时缺 data/items 会抛 PathNotFoundException。
+            body = response.json()
+            assert body["detail"] == "当前未登陆，请登陆后使用。"
+            assert body["items"] == []
+            assert body["data"]["items"] == []
+        else:
+            assert response.json() == {"detail": "当前未登陆，请登陆后使用。"}
 
     console_response = anonymous.get("/api/console/chapter/invalid")
     assert console_response.status_code == 401
