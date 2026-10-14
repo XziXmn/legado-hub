@@ -1474,10 +1474,18 @@ async def legado_explore(request: Request, sourceId: str = "", groupId: str = ""
             library_books_service.build_search_injected_item(book, base_api=base_api)
             for book in published["items"]
         ]
-        return {
+        payload = {
             "implemented": True,
             "sourceId": source_id,
             "groupId": group_id or "published",
             "page": published["page"],
             "items": items,
         }
+        # 部分阅读端的探索链路会先跑本源的 ruleBookInfo.init（= "$.data"）再跑
+        # ruleExplore.bookList（= "$.items"）。这里补一个同构的 data 节点，
+        # 让两种上下文下 $.data / $.items 都能解析到同一份列表（顶层 items 不变）。
+        payload["data"] = {"page": published["page"], "items": items}
+        total = published.get("total")
+        if isinstance(total, int):
+            payload["data"]["total"] = total
+        return payload
