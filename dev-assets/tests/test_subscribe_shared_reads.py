@@ -112,7 +112,15 @@ def test_legado_manifest_is_anonymous_but_reading_requires_valid_bearer(client):
     for path in protected_paths:
         response = anonymous.get(path)
         assert response.status_code == 401
-        assert response.json() == {"detail": "当前未登陆，请登陆后使用。"}
+        if path == "/api/subscribe/legado/explore":
+            # 探索响应必须保持可解析：客户端会把 ruleBookInfo.init（"$.data"）
+            # 套在它上面解析，401 时缺 data/items 会抛 PathNotFoundException。
+            body = response.json()
+            assert body["detail"] == "当前未登陆，请登陆后使用。"
+            assert body["items"] == []
+            assert body["data"]["items"] == []
+        else:
+            assert response.json() == {"detail": "当前未登陆，请登陆后使用。"}
 
     console_response = anonymous.get("/api/console/chapter/invalid")
     assert console_response.status_code == 401
@@ -1199,8 +1207,13 @@ def test_legado_reads_only_published_shared_content_without_db_side_effects(
     assert 'var _base = "http://testserver"' in source["searchUrl"]
     assert "/api/subscribe/legado/search" in source["searchUrl"]
     assert "waitMs" not in source["searchUrl"]
-    assert source["exploreUrl"].startswith("已发布书库::@js:")
+    assert source["enabledExplore"] is True
+    assert source["exploreUrl"].startswith("@js:")
     assert "/api/subscribe/legado/explore" in source["exploreUrl"]
+    # 分类串必须是单行：Legado 按换行拆分 exploreUrl 结果，多行会把 JS 当分组标题。
+    explore_last_line = source["exploreUrl"].rstrip().splitlines()[-1]
+    assert "'已发布书库::'" in explore_last_line
+    assert "/api/subscribe/legado/explore?page={{page}}" in explore_last_line
     assert source["ruleToc"]["isVip"] == "$.isVip"
     assert source["ruleToc"]["isPay"] == "$.isPay"
     assert "isVolume" in source["ruleToc"]
