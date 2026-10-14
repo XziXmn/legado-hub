@@ -29,7 +29,7 @@ from app.core.public_security import (
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.35"
 # Last beta marker: preserve Max's direct chapter request fallback (ms).
-_READER_RULE_RELEASED_AT_MS = 1791793689011
+_READER_RULE_RELEASED_AT_MS = 1791963543208
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
@@ -221,18 +221,27 @@ def _search_url_rule(base_api: str) -> str:
 
 
 def _explore_url_rule(base_api: str) -> str:
-    """Explore entry with pre-request token resolve (same as search)."""
-    base = str(base_api or "").rstrip("/")
-    # Keep group title prefix; URL body is @js so token is attached before GET.
+    """探索入口：整段必须是 ``@js:``，执行后返回**单行**分类规则串。
+
+    Legado 由 ``BookSourceExtensions.exploreKinds`` 解析 exploreUrl：只有**以**
+    ``js``/``@js:`` 开头的值才会先执行 JS 取「分类规则串」，结果若是 JSON 数组
+    按数组解析，否则按换行拆分、每行以 ``::`` 分隔标题与 URL。
+
+    早先的写法把多行 JS 放在 ``标题::@js:`` 的 URL 位置，Legado 不认为它是 JS，
+    于是按换行拆开 → 原始 JS 被整串当成分组标题渲染（Legado Max 上可见）；
+    而且该位置的 ``page`` 变量并不存在，分页也拿不到页码。
+
+    因此 ``@js:`` 必须放在 exploreUrl 本身，并只返回一行；分页改用 Legado 在
+    发现页支持的 ``{{page}}`` 模板。
+    """
+    base = json.dumps(str(base_api or "").rstrip("/"), ensure_ascii=False)
     return (
-        "已发布书库::@js:\n"
+        "@js:\n"
         "try { if (typeof legadoHubResolveAuth === \"function\") legadoHubResolveAuth(); } catch (e0) {}\n"
         "var _base = "
-        + json.dumps(base, ensure_ascii=False)
+        + base
         + ";\n"
-        "var _page = \"1\";\n"
-        "try { _page = String(page != null ? page : \"1\"); } catch (e1) { _page = \"1\"; }\n"
-        "_base + \"/api/subscribe/legado/explore?page=\" + encodeURIComponent(_page);"
+        "'已发布书库::' + _base + '/api/subscribe/legado/explore?page={{page}}';"
     )
 
 
