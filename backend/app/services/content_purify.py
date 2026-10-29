@@ -20,6 +20,19 @@ CHAPTER_TITLE_RE = re.compile(r"^(#\s*)?第[一二三四五六七八九十百零
 _SIX_NINE = r"6\s*[=＝.。．]\s*9"
 _BOOK_BA = r"[书書][_＿\s'′]*吧"
 
+# Confusable separators that some jumbled watermarks insert between every
+# character (often doubled), e.g. 最⊥新⊥小⊥说⊥在⊥六⊥9⊥⊥书⊥⊥吧⊥⊥首⊥发！
+_CONFUSABLE_GAP = r"[\s⊥⋚⋛⋯…·•※◦∘∙⋅~～_\-—]{0,3}"
+
+
+def _glyph_spaced(phrase: str) -> str:
+    """Allow optional confusable separators between every character of *phrase*."""
+    return _CONFUSABLE_GAP.join(phrase)
+
+
+# 最⊥新⊥小⊥说⊥在⊥六⊥9⊥⊥书⊥⊥吧⊥⊥首⊥发！
+_LATEST_69_AD = _glyph_spaced("最新小说在六9书吧首发")
+
 # Inline / residual watermarks (full phrases first, then 69 fragments like bare 6=9+).
 INLINE_AD_RES: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -46,6 +59,8 @@ INLINE_AD_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?m)^\s*[%％]\s*六九\s*[%％]\s*$"),
     re.compile(r"(?m)^\s*[书書][_＿'′]?\s*吧\s*$"),
     re.compile(r"[%％]\s*六九\s*[%％]"),
+    # 最⊥新⊥小⊥说⊥在⊥六⊥9⊥⊥书⊥⊥吧⊥⊥首⊥发！
+    re.compile(_LATEST_69_AD + r"[。．.!！]?"),
 )
 
 GLOBAL_AD_PATTERNS: list[str] = [
@@ -77,6 +92,8 @@ GLOBAL_AD_PATTERNS: list[str] = [
     r"^\s*</?(?:ins|div)>\s*$",
     # Residuals: bare 6=9+ / 6.9 (line containing this fragment is dropped)
     rf"{_SIX_NINE}\s*[+＋]",
+    # 最⊥新⊥小⊥说⊥在⊥六⊥9⊥⊥书⊥⊥吧⊥⊥首⊥发！(whole-line fallback)
+    _LATEST_69_AD + r"[。．.!！]?",
 ]
 
 
