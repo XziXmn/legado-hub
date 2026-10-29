@@ -29,7 +29,7 @@ from app.core.public_security import (
 #   comment / jsLib) and RELEASED_AT_MS.
 _READER_RULE_VERSION = "0.0.35"
 # Last beta marker: preserve Max's direct chapter request fallback (ms).
-_READER_RULE_RELEASED_AT_MS = 1791963543208
+_READER_RULE_RELEASED_AT_MS = 1793235643625
 
 # Dual source identity: public vs LAN imports coexist in Reading.
 _PUBLIC_BOOK_SOURCE_URL = "LegadoHub"
